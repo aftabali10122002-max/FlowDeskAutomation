@@ -1,0 +1,57 @@
+﻿# .NET build output
+**/bin/
+**/obj/
+**/out/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.cache
+
+# Node.js and frontend build output
+**/node_modules/
+**/dist/
+**/coverage/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Local application configuration
+**/appsettings.Development.json
+**/appsettings.Local.json
+
+# Certificates and private keys
+*.pfx
+*.p12
+*.key
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local backups and database files
+*.local-backup
+*.bak
+*.mdf
+*.ldf
+
+# Local secrets and configuration backups
+*.secret
+
+# Local configuration and secrets
+**/appsettings.Development.json
+**/appsettings.Local.json
+*.local-backup
+*.bak
+*.mdf
+*.ldf
+
+# User-specific IDE files
+.vscode/
+.idea/
