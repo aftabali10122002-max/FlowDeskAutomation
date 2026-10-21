@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using FlowDesk.Application.Interfaces;
 using FlowDesk.Domain.Entities;
 using FlowDesk.Domain.Enums;
 using FlowDesk.Infrastructure.Persistence;
@@ -12,6 +13,79 @@ namespace FlowDisk.Api.Tests;
 
 public sealed class ApprovalWorkflowTests
 {
+    [Fact]
+    public async Task Notifications_ArePagedUnreadAndScopedToTheRecipient()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var employee = await factory.AddUserAsync();
+        var otherEmployee = await factory.AddUserAsync();
+        using var unauthenticatedClient = factory.CreateClient();
+        using var deniedNegotiation = await unauthenticatedClient.PostAsync(
+            "/hubs/notifications/negotiate?negotiateVersion=1",
+            content: null);
+        Assert.Equal(HttpStatusCode.Unauthorized, deniedNegotiation.StatusCode);
+        using var employeeClient = factory.CreateAuthorizedClient(
+            employee.Id,
+            UserRoles.Employee);
+        using var otherClient = factory.CreateAuthorizedClient(
+            otherEmployee.Id,
+            UserRoles.Employee);
+        using var authorizedNegotiation = await employeeClient.PostAsync(
+            "/hubs/notifications/negotiate?negotiateVersion=1",
+            content: null);
+        Assert.Equal(HttpStatusCode.OK, authorizedNegotiation.StatusCode);
+
+        using var createRequest = await employeeClient.PostAsJsonAsync(
+            "/api/requests",
+            new { title = "Notification request", amount = 45m });
+        Assert.Equal(HttpStatusCode.Created, createRequest.StatusCode);
+        using var createdDocument = JsonDocument.Parse(
+            await createRequest.Content.ReadAsStringAsync());
+        var requestId = createdDocument.RootElement
+            .GetProperty("id")
+            .GetInt32();
+
+        using var notificationsResponse = await employeeClient.GetAsync(
+            "/api/notifications?page=1&pageSize=1");
+        Assert.Equal(HttpStatusCode.OK, notificationsResponse.StatusCode);
+        using var notifications = JsonDocument.Parse(
+            await notificationsResponse.Content.ReadAsStringAsync());
+        var notification = Assert.Single(notifications.RootElement
+            .GetProperty("items")
+            .EnumerateArray()
+            .ToArray());
+        Assert.Equal(requestId, notification.GetProperty("requestId").GetInt32());
+        Assert.Equal("RequestSubmitted", notification.GetProperty("type").GetString());
+        Assert.Equal(1, notifications.RootElement
+            .GetProperty("unreadCount").GetInt32());
+        var notificationId = notification.GetProperty("id").GetInt64();
+
+        using var otherNotificationsResponse = await otherClient.GetAsync(
+            "/api/notifications");
+        using var otherNotifications = JsonDocument.Parse(
+            await otherNotificationsResponse.Content.ReadAsStringAsync());
+        Assert.Empty(otherNotifications.RootElement
+            .GetProperty("items")
+            .EnumerateArray());
+
+        using var crossUserRead = await otherClient.PatchAsync(
+            $"/api/notifications/{notificationId}/read",
+            content: null);
+        Assert.Equal(HttpStatusCode.NotFound, crossUserRead.StatusCode);
+
+        using var markRead = await employeeClient.PatchAsync(
+            $"/api/notifications/{notificationId}/read",
+            content: null);
+        Assert.Equal(HttpStatusCode.NoContent, markRead.StatusCode);
+        using var readNotificationsResponse = await employeeClient.GetAsync(
+            "/api/notifications");
+        using var readNotifications = JsonDocument.Parse(
+            await readNotificationsResponse.Content.ReadAsStringAsync());
+        Assert.Equal(0, readNotifications.RootElement
+            .GetProperty("unreadCount").GetInt32());
+    }
+
     [Fact]
     public async Task TwoStageWorkflow_RestrictsEachDecisionAndCompletesInOrder()
     {
@@ -278,6 +352,7 @@ public sealed class ApprovalWorkflowTests
         var employee = await factory.AddUserAsync();
         var manager = await factory.AddUserAsync(UserRoles.Manager);
         var escalationManager = await factory.AddUserAsync(UserRoles.Manager);
+        var unrelatedEmployee = await factory.AddUserAsync();
         using var adminClient = factory.CreateAuthorizedClient(
             admin.Id,
             UserRoles.Admin);
@@ -290,6 +365,9 @@ public sealed class ApprovalWorkflowTests
         using var escalationClient = factory.CreateAuthorizedClient(
             escalationManager.Id,
             UserRoles.Manager);
+        using var unrelatedClient = factory.CreateAuthorizedClient(
+            unrelatedEmployee.Id,
+            UserRoles.Employee);
 
         var workflowId = await CreateWorkflowAsync(
             adminClient,
@@ -336,8 +414,13 @@ public sealed class ApprovalWorkflowTests
         Assert.Equal(HttpStatusCode.OK, notificationsResponse.StatusCode);
         using var notifications = JsonDocument.Parse(
             await notificationsResponse.Content.ReadAsStringAsync());
+        var escalationNotifications = notifications.RootElement
+            .GetProperty("items")
+            .EnumerateArray()
+            .ToArray();
         var notification = Assert.Single(
-            notifications.RootElement.EnumerateArray().ToArray());
+            escalationNotifications,
+            x => x.GetProperty("type").GetString() == "Escalation");
         var notificationId = notification.GetProperty("id").GetInt64();
         Assert.Contains(
             "overdue",
@@ -346,9 +429,18 @@ public sealed class ApprovalWorkflowTests
         Assert.EndsWith(
             "Z",
             notification.GetProperty("createdAtUtc").GetString());
-        var otherUserNotifications = await managerClient
-            .GetFromJsonAsync<List<JsonElement>>("/api/notifications");
-        Assert.Empty(otherUserNotifications!);
+        var assignedManagerNotifications = await managerClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        var assignedManagerNotification = Assert.Single(
+            assignedManagerNotifications.GetProperty("items")
+                .EnumerateArray());
+        Assert.Equal(
+            "RequestAssigned",
+            assignedManagerNotification.GetProperty("type").GetString());
+        var unrelatedNotifications = await unrelatedClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        Assert.Empty(unrelatedNotifications.GetProperty("items")
+            .EnumerateArray());
 
         using var markRead = await escalationClient.PatchAsync(
             $"/api/notifications/{notificationId}/read",
@@ -363,12 +455,85 @@ public sealed class ApprovalWorkflowTests
         Assert.Equal(0, repeatedDocument.RootElement
             .GetProperty("processed").GetInt32());
         var notificationsAfterRead = await escalationClient.GetFromJsonAsync<
-            List<JsonElement>>("/api/notifications");
-        Assert.Single(notificationsAfterRead!);
+            JsonElement>("/api/notifications");
+        var notificationAfterRead = Assert.Single(
+            notificationsAfterRead.GetProperty("items").EnumerateArray(),
+            x => x.GetProperty("type").GetString() == "Escalation");
         Assert.EndsWith(
             "Z",
-            Assert.Single(notificationsAfterRead!)
-                .GetProperty("readAtUtc").GetString());
+            notificationAfterRead.GetProperty("readAtUtc").GetString());
+    }
+
+    [Fact]
+    public async Task DeadlineReminder_IsDeduplicatedAndExcludesCompletedRequests()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var admin = await factory.AddUserAsync(UserRoles.Admin);
+        var employee = await factory.AddUserAsync();
+        var manager = await factory.AddUserAsync(UserRoles.Manager);
+        using var adminClient = factory.CreateAuthorizedClient(
+            admin.Id,
+            UserRoles.Admin);
+        using var employeeClient = factory.CreateAuthorizedClient(
+            employee.Id,
+            UserRoles.Employee);
+        using var managerClient = factory.CreateAuthorizedClient(
+            manager.Id,
+            UserRoles.Manager);
+
+        var workflowId = await CreateWorkflowAsync(
+            adminClient,
+            $"deadline-reminder-{Guid.NewGuid():N}",
+            departmentId: null,
+            [Stage(1, manager.Id)]);
+        using var activate = await adminClient.PostAsync(
+            $"/api/admin/workflows/{workflowId}/activate",
+            content: null);
+        Assert.Equal(HttpStatusCode.NoContent, activate.StatusCode);
+
+        var requestIds = new List<int>();
+        foreach (var title in new[] { "Completed before reminder", "Still pending" })
+        {
+            using var response = await employeeClient.PostAsJsonAsync(
+                "/api/requests",
+                new { title, amount = 30m });
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            using var document = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            requestIds.Add(document.RootElement.GetProperty("id").GetInt32());
+        }
+
+        using var decision = await managerClient.PatchAsJsonAsync(
+            $"/api/requests/{requestIds[0]}/approve",
+            new { comment = "Completed" });
+        Assert.Equal(HttpStatusCode.OK, decision.StatusCode);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var repository = scope.ServiceProvider
+                .GetRequiredService<IApprovalWorkflowRepository>();
+            var processed = await repository.ProcessDeadlineRemindersAsync(
+                DateTime.UtcNow.AddMinutes(2),
+                reminderMinutesBeforeDeadline: 120);
+            Assert.Equal(1, processed);
+            Assert.Equal(
+                0,
+                await repository.ProcessDeadlineRemindersAsync(
+                    DateTime.UtcNow.AddMinutes(2),
+                    reminderMinutesBeforeDeadline: 120));
+        }
+
+        var managerNotifications = await managerClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications?pageSize=100");
+        var reminders = managerNotifications.GetProperty("items")
+            .EnumerateArray()
+            .Where(x => x.GetProperty("type").GetString() == "DeadlineReminder")
+            .ToArray();
+        var reminder = Assert.Single(reminders);
+        Assert.Equal(
+            requestIds[1],
+            reminder.GetProperty("requestId").GetInt32());
     }
 
     [Fact]

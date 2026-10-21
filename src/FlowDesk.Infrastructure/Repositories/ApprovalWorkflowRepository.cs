@@ -414,6 +414,10 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
 
         if (instance.Request.CreatedByUserId is int requestOwnerId)
         {
+            var ownerEmail = await context.Users
+                .Where(x => x.Id == requestOwnerId)
+                .Select(x => x.Email)
+                .SingleOrDefaultAsync();
             var notificationType = !approve
                 ? WorkflowNotificationType.RequestRejected
                 : instance.Status == ApprovalWorkflowStatus.Approved
@@ -434,7 +438,10 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
                 notificationType,
                 message,
                 $"decision:{activeStage.Id}:owner",
-                nowUtc));
+                nowUtc,
+                recipientEmail: ownerEmail,
+                emailSubject: $"Request decision: {instance.Request.Title}",
+                emailBody: message));
         }
 
         await transaction.CommitAsync();
@@ -517,7 +524,10 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
                 WorkflowNotificationType.RequestCancelled,
                 $"Request REQ-{requestId:D4} was cancelled by its requester.",
                 $"cancel:{requestId}:{approver.Id}",
-                nowUtc));
+                nowUtc,
+                recipientEmail: approver.Email,
+                emailSubject: $"Request cancelled: {request.Title}",
+                emailBody: $"Request REQ-{requestId:D4} ({request.Title}) was cancelled by its requester."));
         }
 
         await transaction.CommitAsync();
@@ -619,13 +629,20 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
                 x.DueAtUtc > nowUtc &&
                 x.DueAtUtc <= reminderWindowEnd &&
                 x.WorkflowInstance.Status == ApprovalWorkflowStatus.Active &&
-                x.WorkflowInstance.Request.Status == RequestStatus.Pending &&
-                !context.WorkflowNotifications.Any(n =>
-                    n.DeduplicationKey == $"deadline-reminder:{x.Id}"))
+                x.WorkflowInstance.Request.Status == RequestStatus.Pending)
             .OrderBy(x => x.DueAtUtc)
             .Take(200)
             .ToListAsync();
 
+        var reminderKeys = candidates
+            .Select(x => $"deadline-reminder:{x.Id}")
+            .ToArray();
+        var existingReminderKeys = await context.WorkflowNotifications
+            .Where(x =>
+                x.DeduplicationKey != null &&
+                reminderKeys.Contains(x.DeduplicationKey))
+            .Select(x => x.DeduplicationKey!)
+            .ToHashSetAsync();
         var approverIds = candidates.Select(x => x.ApproverUserId)
             .Distinct()
             .ToArray();
@@ -639,7 +656,8 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
         var notifications = new List<WorkflowNotification>();
         foreach (var stage in candidates)
         {
-            if (!approverLookup.ContainsKey(stage.ApproverUserId))
+            if (!approverLookup.ContainsKey(stage.ApproverUserId) ||
+                existingReminderKeys.Contains($"deadline-reminder:{stage.Id}"))
             {
                 continue;
             }
@@ -650,7 +668,10 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
                 WorkflowNotificationType.DeadlineReminder,
                 $"Request REQ-{stage.WorkflowInstance.RequestId:D4}, stage {stage.Sequence}, is approaching its approval deadline.",
                 $"deadline-reminder:{stage.Id}",
-                nowUtc));
+                nowUtc,
+                recipientEmail: approverLookup[stage.ApproverUserId].Email,
+                emailSubject: $"Approval deadline reminder: request REQ-{stage.WorkflowInstance.RequestId:D4}",
+                emailBody: $"Request REQ-{stage.WorkflowInstance.RequestId:D4}, stage {stage.Sequence}, is approaching its approval deadline."));
         }
 
         await transaction.CommitAsync();
@@ -694,16 +715,25 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
     {
         var notifications = context.WorkflowNotifications
             .AsNoTracking()
-            .Where(x => x.RecipientUserId == userId)
-            ;
+            .Where(x => x.RecipientUserId == userId);
         var totalCount = await notifications.CountAsync();
         var unreadCount = await notifications.CountAsync(x => x.ReadAtUtc == null);
-        var items = await notifications
-            .OrderByDescending(x => x.CreatedAtUtc)
-            .ThenByDescending(x => x.Id)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync();
+        var offset = (long)(page - 1) * pageSize;
+        List<WorkflowNotification> items;
+        if (offset > int.MaxValue)
+        {
+            items = [];
+        }
+        else
+        {
+            items = await notifications
+                .OrderByDescending(x => x.CreatedAtUtc)
+                .ThenByDescending(x => x.Id)
+                .Skip((int)offset)
+                .Take(pageSize)
+                .ToListAsync();
+        }
+
         return new WorkflowNotificationPage(
             items,
             totalCount,
@@ -740,6 +770,9 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             .AsNoTracking()
             .Where(x =>
                 x.SentAtUtc == null &&
+                x.AttemptCount < 10 &&
+                (!x.LastAttemptAtUtc.HasValue ||
+                 x.LastAttemptAtUtc <= nowUtc.AddMinutes(-1)) &&
                 (!x.LeaseUntilUtc.HasValue || x.LeaseUntilUtc <= nowUtc))
             .OrderBy(x => x.CreatedAtUtc)
             .Take(batchSize)

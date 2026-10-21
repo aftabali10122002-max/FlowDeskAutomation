@@ -1,8 +1,41 @@
 /* @vitest-environment jsdom */
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+
+const signalrMock = vi.hoisted(() => ({
+  handlers: {} as Record<string, (value?: unknown) => void>,
+}))
+
+vi.mock('@microsoft/signalr', () => {
+  const connection = {
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(async () => undefined),
+    on: (event: string, handler: (value?: unknown) => void) => {
+      signalrMock.handlers[event] = handler
+    },
+    onreconnecting: (handler: () => void) => {
+      signalrMock.handlers.reconnecting = handler
+    },
+    onreconnected: (handler: () => void) => {
+      signalrMock.handlers.reconnected = handler
+    },
+    onclose: (handler: () => void) => {
+      signalrMock.handlers.close = handler
+    },
+  }
+  class MockHubConnectionBuilder {
+    withUrl() { return this }
+    withAutomaticReconnect() { return this }
+    configureLogging() { return this }
+    build() { return connection }
+  }
+  return {
+    HubConnectionBuilder: MockHubConnectionBuilder,
+    LogLevel: { Warning: 3 },
+  }
+})
 
 const pendingRequest = {
   id: 317,
@@ -61,6 +94,14 @@ function mockApi(options: {
   users?: { id: number; fullName: string; email: string; role: string; departmentId: number | null; createdAtUtc: string }[]
   departments?: { id: number; name: string; code: string; isActive: boolean; createdAtUtc: string }[]
   workflowRules?: unknown[]
+  notifications?: {
+    id: number
+    requestId: number | null
+    type: string
+    message: string
+    createdAtUtc: string
+    readAtUtc: string | null
+  }[]
 } = {}) {
   let requests = options.requests ?? [{ ...pendingRequest }]
   const role = options.role ?? 'Manager'
@@ -93,6 +134,21 @@ function mockApi(options: {
         email: 'ali.manager@example.test',
         role,
       })
+    }
+    if (url.pathname === '/api/notifications' && method === 'GET') {
+      const notifications = options.notifications ?? []
+      const page = Number(url.searchParams.get('page') ?? 1)
+      const pageSize = Number(url.searchParams.get('pageSize') ?? 20)
+      return jsonResponse(200, {
+        items: notifications.slice((page - 1) * pageSize, page * pageSize),
+        totalCount: notifications.length,
+        unreadCount: notifications.filter((notification) => notification.readAtUtc == null).length,
+        page,
+        pageSize,
+      })
+    }
+    if (/^\/api\/notifications\/\d+\/read$/.test(url.pathname) && method === 'PATCH') {
+      return new Response(null, { status: 204 })
     }
     if (url.pathname === '/api/requests' && method === 'GET') {
       if (options.requestsStatus && options.requestsStatus >= 400) {
@@ -233,6 +289,7 @@ describe('Manager dashboard', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
+    signalrMock.handlers = {}
   })
 
   it('signs in, resolves the Manager role, and shows only the assigned request with review details', async () => {
@@ -504,6 +561,51 @@ describe('Manager dashboard', () => {
       amount: 1250,
       priority: 'Medium',
     }))
+  })
+
+  it('shows unread notifications, marks one read, and opens its related request', async () => {
+    const { calls } = mockApi({
+      role: 'Employee',
+      notifications: [{
+        id: 71,
+        requestId: pendingRequest.id,
+        type: 'RequestSubmitted',
+        message: 'Your request was submitted.',
+        createdAtUtc: '2026-10-19T12:00:00Z',
+        readAtUtc: null,
+      }],
+    })
+    render(<App />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Email address'), 'employee@example.test')
+    await user.type(screen.getByLabelText('Password'), 'local-test-password')
+    await user.click(screen.getByRole('button', { name: /Sign in/ }))
+    await screen.findByRole('heading', { name: /Good (morning|afternoon|evening), Ali/ })
+
+    await user.click(await screen.findByRole('button', { name: 'Notifications, 1 unread' }))
+    const notification = await screen.findByRole('button', {
+      name: /Your request was submitted/,
+    })
+    await user.click(notification)
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.method === 'PATCH' && call.path === '/api/notifications/71/read')).toBe(true)
+    })
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Laptop replacement')).toBeTruthy()
+  })
+
+  it('shows SignalR reconnecting status and refreshes the feed after reconnect', async () => {
+    mockApi()
+    render(<App />)
+    const user = await signInAsManager()
+    await user.click(screen.getByRole('button', { name: /^Notifications/ }))
+    expect(await screen.findByText('connected')).toBeTruthy()
+
+    act(() => signalrMock.handlers.reconnecting?.())
+    expect(await screen.findByText('reconnecting')).toBeTruthy()
+    act(() => signalrMock.handlers.reconnected?.())
+    expect(await screen.findByText('connected')).toBeTruthy()
   })
 
   it('clears the authenticated session on sign out', async () => {

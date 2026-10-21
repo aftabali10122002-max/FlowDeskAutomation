@@ -78,9 +78,19 @@ export type WorkflowRuleInput = {
 
 export type WorkflowNotification = {
   id: number
+  requestId: number | null
+  type: string
   message: string
   createdAtUtc: string
   readAtUtc: string | null
+}
+
+export type WorkflowNotificationPage = {
+  items: WorkflowNotification[]
+  totalCount: number
+  unreadCount: number
+  page: number
+  pageSize: number
 }
 
 export type RequestAssignment = {
@@ -301,8 +311,10 @@ export function processWorkflowEscalations() {
   })
 }
 
-export function getNotifications() {
-  return request<WorkflowNotification[]>('/notifications')
+export function getNotifications(page = 1, pageSize = 20) {
+  return request<WorkflowNotificationPage>(
+    `/notifications?page=${page}&pageSize=${pageSize}`,
+  )
 }
 
 export function markNotificationRead(id: number) {

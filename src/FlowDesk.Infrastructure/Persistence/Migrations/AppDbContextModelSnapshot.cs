@@ -487,6 +487,69 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("FlowDesk.Domain.Entities.WorkflowEmailOutboxMessage", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DeduplicationKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
+
+                    b.Property<DateTime?>("LastAttemptAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("LeaseUntilUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long>("NotificationId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("RecipientEmail")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<int>("RecipientUserId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeduplicationKey")
+                        .IsUnique();
+
+                    b.HasIndex("NotificationId");
+
+                    b.HasIndex("RecipientUserId");
+
+                    b.HasIndex("SentAtUtc", "LeaseUntilUtc", "CreatedAtUtc");
+
+                    b.ToTable("WorkflowEmailOutbox", (string)null);
+                });
+
             modelBuilder.Entity("FlowDesk.Domain.Entities.WorkflowNotification", b =>
                 {
                     b.Property<long>("Id")
@@ -497,6 +560,10 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("DeduplicationKey")
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
 
                     b.Property<long?>("EscalationId")
                         .HasColumnType("bigint");
@@ -512,13 +579,27 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.Property<int>("RecipientUserId")
                         .HasColumnType("int");
 
+                    b.Property<int?>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("DeduplicationKey")
+                        .IsUnique()
+                        .HasFilter("[DeduplicationKey] IS NOT NULL");
 
                     b.HasIndex("EscalationId")
                         .IsUnique()
                         .HasFilter("[EscalationId] IS NOT NULL");
 
                     b.HasIndex("RecipientUserId");
+
+                    b.HasIndex("RequestId");
 
                     b.ToTable("WorkflowNotifications", (string)null);
                 });
@@ -701,6 +782,25 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.Navigation("Department");
                 });
 
+            modelBuilder.Entity("FlowDesk.Domain.Entities.WorkflowEmailOutboxMessage", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.WorkflowNotification", "Notification")
+                        .WithMany()
+                        .HasForeignKey("NotificationId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.User", "RecipientUser")
+                        .WithMany()
+                        .HasForeignKey("RecipientUserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Notification");
+
+                    b.Navigation("RecipientUser");
+                });
+
             modelBuilder.Entity("FlowDesk.Domain.Entities.WorkflowNotification", b =>
                 {
                     b.HasOne("FlowDesk.Domain.Entities.ApprovalWorkflowEscalation", "Escalation")
@@ -714,9 +814,16 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
 
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithMany()
+                        .HasForeignKey("RequestId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.Navigation("Escalation");
 
                     b.Navigation("RecipientUser");
+
+                    b.Navigation("Request");
                 });
 
             modelBuilder.Entity("FlowDesk.Domain.Entities.ApprovalRequest", b =>

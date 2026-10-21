@@ -16,14 +16,28 @@ It is designed to manage approval requests, department-based workflows, multi-le
 - Approval comments and workflow tracking
 
 ### Notifications — Phase 5
-Planned or in-progress capabilities:
-- In-app notifications
-- Email notifications
-- Real-time updates using SignalR
-- Deadline reminders
-- Escalation alerts
+- Persisted, recipient-scoped notifications with paginated retrieval, unread counts, and mark-read.
+- User-targeted SignalR delivery at `/hubs/notifications`; the connection uses the existing JWT.
+- Assignment and workflow decision emails queued in a SQL Server outbox and sent asynchronously.
+- Configurable deadline reminders and automatic overdue escalation processing.
 
-Feature availability depends on the current implementation and validation status.
+The Phase 5 migration source is `src/FlowDesk.Infrastructure/Persistence/Migrations/20261020231021_AddWorkflowNotifications.cs`. It has been generated and reviewed but **not applied** in this task. Apply it only through the normal reviewed deployment process to a verified target database.
+
+Email delivery is disabled unless `Email:Enabled` is set to `true`. Keep SMTP credentials in user-secrets or deployment environment variables, never in source-controlled settings:
+
+```powershell
+dotnet user-secrets set "Email:Enabled" "true" --project .\src\FlowDisk.Api
+dotnet user-secrets set "Email:Smtp:Host" "<SMTP_HOST>" --project .\src\FlowDisk.Api
+dotnet user-secrets set "Email:Smtp:Port" "587" --project .\src\FlowDisk.Api
+dotnet user-secrets set "Email:Smtp:EnableSsl" "true" --project .\src\FlowDisk.Api
+dotnet user-secrets set "Email:Smtp:From" "<SENDER_ADDRESS>" --project .\src\FlowDisk.Api
+dotnet user-secrets set "Email:Smtp:Username" "<SMTP_USERNAME>" --project .\src\FlowDisk.Api
+dotnet user-secrets set "Email:Smtp:Password" "<SMTP_PASSWORD>" --project .\src\FlowDisk.Api
+```
+
+SMTP username/password are optional for relays that do not require authentication. `Notifications:WorkerIntervalSeconds` defaults to `60`; `Notifications:ReminderMinutesBeforeDeadline` defaults to `60`. The reminder is sent once per active workflow stage. Failed email deliveries retry after one minute, up to ten attempts. SMTP cannot guarantee exactly-once delivery if the process stops after the remote server accepts a message but before the outbox is marked sent.
+
+The frontend uses the API's same-origin SignalR endpoint. The Vite development proxy forwards `/hubs` with WebSocket support to `http://localhost:5192`. To manually verify, run the API and frontend, sign in as the intended approver, assign a request or submit a routed request, and observe the notification badge/list in that user's session. Then verify that another user's session receives no private notification and that a disconnected user can retrieve it after reconnecting or reopening the app.
 
 ## Technology Stack
 
@@ -135,9 +149,7 @@ dotnet test --configuration Release
 
 The project is under active development.
 
-Phase 4 focuses on the advanced approval workflow. Phase 5 focuses on notifications, email integration, SignalR updates, deadline reminders, and escalation alerts.
-
-Check the implementation and automated test results before treating individual features as production-ready.
+Phase 4 provides the advanced approval workflow. Phase 5 notification code and migration source are implemented; email delivery requires SMTP configuration, and the migration must be applied to the intended database before deployment.
 
 ## Contributing
 

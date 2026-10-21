@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { HubConnectionBuilder, LogLevel } from '@microsoft/signalr'
 import {
   ApiError,
   assignRequest,
@@ -91,6 +92,7 @@ function App() {
   const [requestsLoadFailed, setRequestsLoadFailed] = useState(false)
   const [users, setUsers] = useState<User[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0)
   const [loading, setLoading] = useState(Boolean(sessionStorage.getItem('flowdesk-token')))
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -112,6 +114,7 @@ function App() {
     setSelectedWorkflow(null)
     setUsers([])
     setDepartments([])
+    setNotificationUnreadCount(0)
     setLoading(false)
   }, [])
 
@@ -143,6 +146,12 @@ function App() {
       ])
       setUsers(userData)
       setDepartments(departmentData)
+    }
+    try {
+      const notificationPage = await getNotifications()
+      setNotificationUnreadCount(notificationPage.unreadCount)
+    } catch (caught) {
+      setError(`Notifications could not be loaded. ${messageFrom(caught)}`)
     }
   }, [])
 
@@ -206,6 +215,25 @@ function App() {
       }
       else if (caught instanceof ApiError && caught.status === 403) setError('You do not have permission to view this request.')
       else setError(messageFrom(caught))
+    }
+  }
+
+  async function openNotificationRequest(requestId: number) {
+    const existing = requests.find((item) => item.id === requestId)
+    if (existing) {
+      await openRequest(existing)
+      return
+    }
+
+    try {
+      const [request, workflow] = await Promise.all([
+        getRequest(requestId),
+        getRequestWorkflow(requestId),
+      ])
+      setSelectedRequest(request)
+      setSelectedWorkflow(workflow)
+    } catch (caught) {
+      setError(messageFrom(caught))
     }
   }
 
@@ -357,7 +385,12 @@ function App() {
           </div>
           <div className="topbar-actions">
             <span className="topbar-role">{roleName(profile.role)} workspace</span>
-            <WorkflowNotifications onError={setError} />
+            <WorkflowNotifications
+              onError={setError}
+              onNavigateToRequest={openNotificationRequest}
+              unreadCount={notificationUnreadCount}
+              onUnreadCountChange={setNotificationUnreadCount}
+            />
             <button className="header-profile-button" aria-label={`Profile for ${profile.fullName}`} onClick={() => setPage('Profile')}><Avatar name={profile.fullName} /></button>
           </div>
         </header>
@@ -881,36 +914,126 @@ function ProfilePage({ profile }: { profile: UserProfile }) {
   return <><div className="welcome-row"><div><div className="eyebrow">ACCOUNT</div><h1>Your profile</h1><p className="page-subtitle">Your account information and workspace access.</p></div></div><section className="content-card profile-card"><div className="profile-hero"><Avatar name={profile.fullName} large /><div><div className="section-eyebrow">FLOWDESK MEMBER</div><h2>{profile.fullName}</h2><span className="role-chip">{roleName(profile.role)}</span></div></div><div className="profile-fields"><div><span>Full name</span><strong>{profile.fullName}</strong></div><div><span>Email address</span><strong>{profile.email}</strong></div><div><span>Workspace role</span><strong>{roleName(profile.role)}</strong></div></div><p className="profile-readonly">Profile details are read-only because the current API does not support profile editing.</p></section></>
 }
 
-function WorkflowNotifications({ onError }: { onError: (message: string) => void }) {
+function WorkflowNotifications({
+  onError,
+  onNavigateToRequest,
+  unreadCount,
+  onUnreadCountChange,
+}: {
+  onError: (message: string) => void
+  onNavigateToRequest: (requestId: number) => Promise<void>
+  unreadCount: number
+  onUnreadCountChange: (count: number) => void
+}) {
   const [open, setOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(
+    Boolean(sessionStorage.getItem('flowdesk-token')),
+  )
   const [notifications, setNotifications] = useState<WorkflowNotification[]>([])
-  const unreadCount = notifications.filter((notification) => notification.readAtUtc == null).length
+  const [totalCount, setTotalCount] = useState(0)
+  const [page, setPage] = useState(1)
+  const [realtimeState, setRealtimeState] = useState<
+    'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+  >('connecting')
+  const [listError, setListError] = useState('')
+
+  const refreshNotifications = useCallback(async (
+    requestedPage = 1,
+    append = false,
+  ) => {
+    try {
+      const result = await getNotifications(requestedPage)
+      setNotifications((current) => append
+        ? [...current, ...result.items.filter(
+          (item) => !current.some((existing) => existing.id === item.id),
+        )]
+        : result.items)
+      onUnreadCountChange(result.unreadCount)
+      setTotalCount(result.totalCount)
+      setPage(result.page)
+    } catch (caught) {
+      setListError(messageFrom(caught))
+    } finally {
+      setLoading(false)
+    }
+  }, [onUnreadCountChange])
+
+  useEffect(() => {
+    let stopped = false
+    const connection = new HubConnectionBuilder()
+      .withUrl('/hubs/notifications', {
+        accessTokenFactory: () => sessionStorage.getItem('flowdesk-token') ?? '',
+      })
+      .withAutomaticReconnect([0, 2000, 5000, 10000])
+      .configureLogging(LogLevel.Warning)
+      .build()
+
+    connection.on('notificationReceived', (notification: WorkflowNotification) => {
+      setListError('')
+      setNotifications((current) => [
+        notification,
+        ...current.filter((item) => item.id !== notification.id),
+      ])
+      void refreshNotifications()
+    })
+    connection.onreconnecting(() => setRealtimeState('reconnecting'))
+    connection.onreconnected(() => {
+      setRealtimeState('connected')
+      setListError('')
+      void refreshNotifications()
+    })
+    connection.onclose(() => {
+      setRealtimeState('disconnected')
+      if (!stopped) void startConnection()
+    })
+
+    async function startConnection() {
+      while (!stopped) {
+        try {
+          await connection.start()
+          setRealtimeState('connected')
+          return
+        } catch {
+          setRealtimeState('reconnecting')
+          await new Promise((resolve) => window.setTimeout(resolve, 5000))
+        }
+      }
+    }
+
+    void startConnection()
+    return () => {
+      stopped = true
+      void connection.stop()
+    }
+  }, [refreshNotifications])
 
   async function toggle() {
     const nextOpen = !open
     setOpen(nextOpen)
     if (!nextOpen) return
     setLoading(true)
-    try {
-      setNotifications(await getNotifications())
-    } catch (caught) {
-      onError(messageFrom(caught))
-      setOpen(false)
-    } finally {
-      setLoading(false)
-    }
+    setListError('')
+    await refreshNotifications()
   }
 
-  async function markRead(notification: WorkflowNotification) {
-    if (notification.readAtUtc) return
-    try {
-      await markNotificationRead(notification.id)
-      setNotifications((current) => current.map((item) => item.id === notification.id
-        ? { ...item, readAtUtc: new Date().toISOString() }
-        : item))
-    } catch (caught) {
-      onError(messageFrom(caught))
+  async function activateNotification(notification: WorkflowNotification) {
+    if (!notification.readAtUtc) {
+      try {
+        await markNotificationRead(notification.id)
+        setNotifications((current) => current.map((item) => item.id === notification.id
+          ? { ...item, readAtUtc: new Date().toISOString() }
+          : item))
+        onUnreadCountChange(Math.max(0, unreadCount - 1))
+      } catch (caught) {
+        const message = messageFrom(caught)
+        setListError(message)
+        onError(message)
+        return
+      }
+    }
+
+    if (notification.requestId != null) {
+      await onNavigateToRequest(notification.requestId)
     }
   }
 
@@ -920,14 +1043,29 @@ function WorkflowNotifications({ onError }: { onError: (message: string) => void
       {unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}
     </button>
     {open && <section className="notification-popover" aria-label="Workflow notifications">
-      <div className="notification-heading"><strong>Notifications</strong><button className="text-button" onClick={() => setOpen(false)}>Close</button></div>
-      {loading ? <p className="notification-empty">Loading notifications…</p> : notifications.length === 0
+      <div className="notification-heading">
+        <strong>Notifications</strong>
+        <span className={`notification-connection ${realtimeState}`}>{realtimeState}</span>
+        <button className="text-button" onClick={() => setOpen(false)}>Close</button>
+      </div>
+      {listError && <p className="notification-error" role="alert">{listError}</p>}
+      {loading && notifications.length === 0
+        ? <p className="notification-empty">Loading notifications…</p> : notifications.length === 0
         ? <p className="notification-empty">You’re all caught up.</p>
         : <ul>{notifications.map((notification) => <li key={notification.id} className={notification.readAtUtc ? '' : 'unread'}>
-          <button className="notification-item" onClick={() => { void markRead(notification) }}>
-            <span>{notification.message}</span><small>{formatDate(notification.createdAtUtc)}{notification.readAtUtc ? '' : ' · Mark read'}</small>
+          <button className="notification-item" onClick={() => { void activateNotification(notification) }}>
+            <span>{notification.message}</span><small>{formatDate(notification.createdAtUtc)} · {notification.type}{notification.readAtUtc ? '' : ' · Unread'}</small>
           </button>
         </li>)}</ul>}
+      {notifications.length < totalCount && <button
+        className="notification-load-more"
+        disabled={loading}
+        onClick={() => {
+          setLoading(true)
+          setListError('')
+          void refreshNotifications(page + 1, true)
+        }}
+      >{loading ? 'Loading…' : 'Load older notifications'}</button>}
     </section>}
   </div>
 }
