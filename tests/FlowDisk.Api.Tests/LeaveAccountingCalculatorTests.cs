@@ -151,6 +151,43 @@ public sealed class LeaveAccountingCalculatorTests
     }
 
     [Fact]
+    public void FirstEligibleDateAppliesHirePolicyAndProbationDates()
+    {
+        Assert.Equal(
+            new DateOnly(2026, 7, 1),
+            LeaveAccrualCalculator.DetermineFirstEligibleDate(
+                new DateOnly(2026, 6, 1),
+                new DateOnly(2026, 5, 1),
+                probationPeriodDays: 30,
+                allowsLeaveDuringProbation: false));
+        Assert.Equal(
+            new DateOnly(2026, 5, 15),
+            LeaveAccrualCalculator.DetermineFirstEligibleDate(
+                new DateOnly(2026, 4, 1),
+                new DateOnly(2026, 5, 15),
+                probationPeriodDays: 30,
+                allowsLeaveDuringProbation: false));
+        Assert.Equal(
+            new DateOnly(2026, 6, 1),
+            LeaveAccrualCalculator.DetermineFirstEligibleDate(
+                new DateOnly(2026, 6, 1),
+                new DateOnly(2026, 5, 1),
+                probationPeriodDays: 30,
+                allowsLeaveDuringProbation: true));
+    }
+
+    [Fact]
+    public void FirstEligibleDateRequiresHireDateWhenProbationApplies()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            LeaveAccrualCalculator.DetermineFirstEligibleDate(
+                hireDate: null,
+                new DateOnly(2026, 5, 1),
+                probationPeriodDays: 30,
+                allowsLeaveDuringProbation: false));
+    }
+
+    [Fact]
     public void CumulativeAccrualReconcilesRoundingWithoutDrift()
     {
         var alreadyCredited = 0m;
