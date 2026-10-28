@@ -117,6 +117,39 @@ public sealed class LeaveAccountingCalculatorTests
                 new DateOnly(2025, 3, 1)));
     }
 
+    [Theory]
+    [InlineData(-8, 2025, 12, 31)]
+    [InlineData(14, 2026, 1, 1)]
+    public void BusinessDateUsesConfiguredTimezoneAcrossUtcDateBoundary(
+        int offsetHours,
+        int expectedYear,
+        int expectedMonth,
+        int expectedDay)
+    {
+        var timestampUtc = new DateTime(
+            2026, 1, 1, 1, 0, 0, DateTimeKind.Utc);
+        var timeZone = TimeZoneInfo.CreateCustomTimeZone(
+            $"UTC{offsetHours:+0;-0}",
+            TimeSpan.FromHours(offsetHours),
+            "Test business timezone",
+            "Test business timezone");
+
+        Assert.Equal(
+            new DateOnly(expectedYear, expectedMonth, expectedDay),
+            LeaveAccrualCalculator.GetBusinessDate(timestampUtc, timeZone));
+    }
+
+    [Fact]
+    public void BusinessDateRejectsTimestampWithoutUtcKind()
+    {
+        var timestamp = new DateTime(2026, 1, 1, 1, 0, 0);
+
+        Assert.Throws<ArgumentException>(() =>
+            LeaveAccrualCalculator.GetBusinessDate(
+                timestamp,
+                TimeZoneInfo.Utc));
+    }
+
     [Fact]
     public void CumulativeAccrualReconcilesRoundingWithoutDrift()
     {
