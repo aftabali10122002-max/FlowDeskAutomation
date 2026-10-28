@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent, ReactNode, RefObject } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import { HubConnectionBuilder, LogLevel } from '@microsoft/signalr'
 import {
   ApiError,
@@ -43,6 +43,7 @@ import { AuditLogs } from './AuditLogs'
 import { DashboardAnalyticsProvider } from './DashboardAnalyticsData'
 import { AttachmentPicker, RequestAttachmentsPanel } from './RequestAttachments'
 import { formatDate } from './dateFormatting'
+import { useDialogEscape } from './hooks/useDialogEscape'
 import './App.css'
 import './RequestTable.css'
 
@@ -55,50 +56,6 @@ type ToastMessage = {
   id: number
   kind: 'success' | 'error' | 'warning' | 'info'
   text: string
-}
-
-function useDialogEscape(
-  dialogRef: RefObject<HTMLElement | null>,
-  onEscape: () => void,
-  canEscape = true,
-) {
-  const onEscapeRef = useRef(onEscape)
-  const canEscapeRef = useRef(canEscape)
-
-  useEffect(() => {
-    onEscapeRef.current = onEscape
-  }, [onEscape])
-
-  useEffect(() => {
-    canEscapeRef.current = canEscape
-  }, [canEscape])
-
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
-    const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
-      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
-    )
-    firstFocusable?.focus()
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Escape') return
-      const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"]')
-      if (
-        dialogs.item(dialogs.length - 1) !== dialogRef.current ||
-        !canEscapeRef.current
-      ) return
-      event.preventDefault()
-      onEscapeRef.current()
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      previousFocus?.focus()
-    }
-  }, [dialogRef])
 }
 
 const rolePages: Record<string, Page[]> = {
