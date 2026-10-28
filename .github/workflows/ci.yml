@@ -14,21 +14,30 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.401
 
       - name: Restore
-        run: dotnet restore FlowDesk.slnx
+        run: dotnet restore FlowDesk.slnx -p:NuGetAuditLevel=high -p:WarningsAsErrors=NU1903%3BNU1904
 
       - name: Build
         run: dotnet build FlowDesk.slnx --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test tests/FlowDisk.Api.Tests/FlowDisk.Api.Tests.csproj --configuration Release --no-build
+        run: dotnet test tests/FlowDisk.Api.Tests/FlowDisk.Api.Tests.csproj --configuration Release --no-build --collect:"XPlat Code Coverage"
+
+      - name: Upload backend coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: backend-coverage
+          path: tests/FlowDisk.Api.Tests/TestResults/**/coverage.cobertura.xml
+          if-no-files-found: error
+          retention-days: 14
 
   frontend:
     name: Frontend
@@ -39,10 +48,10 @@ jobs:
         working-directory: web
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
@@ -50,6 +59,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
 
       - name: Lint
         run: npm run lint

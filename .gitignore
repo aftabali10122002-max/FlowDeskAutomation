@@ -2,6 +2,7 @@
 **/bin/
 **/obj/
 **/out/
+**/TestResults/
 
 # Visual Studio
 .vs/
