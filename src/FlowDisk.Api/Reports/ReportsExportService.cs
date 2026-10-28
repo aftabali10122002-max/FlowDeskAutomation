@@ -11,7 +11,8 @@ namespace FlowDisk.Api.Reports;
 
 public sealed class ReportsExportService(
     ReportsService reportsService,
-    IConfiguration configuration)
+    IConfiguration configuration,
+    ILogger<ReportsExportService> logger)
 {
     private const int BatchSize = 100;
     private const int DefaultMaximumRows = 10_000;
@@ -290,7 +291,23 @@ public sealed class ReportsExportService(
             if (nextPage.TotalCount != firstPage.TotalCount ||
                 nextPage.Items.Count == 0)
             {
-                throw new ReportExportDataChangedException();
+                var exception = new ReportExportDataChangedException(
+                    pageNumber,
+                    firstPage.TotalCount,
+                    nextPage.TotalCount,
+                    rows.Count,
+                    nextPage.Items.Count);
+                logger.LogWarning(
+                    "Report export pagination changed while collecting rows. " +
+                    "Page {PageNumber}; expected count {ExpectedTotalCount}; " +
+                    "actual count {ActualTotalCount}; collected rows " +
+                    "{CollectedRowCount}; page rows {ReceivedPageRowCount}.",
+                    exception.PageNumber,
+                    exception.ExpectedTotalCount,
+                    exception.ActualTotalCount,
+                    exception.CollectedRowCount,
+                    exception.ReceivedPageRowCount);
+                throw exception;
             }
 
             rows.AddRange(nextPage.Items);

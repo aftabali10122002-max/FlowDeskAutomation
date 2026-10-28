@@ -24,8 +24,18 @@ public sealed class ReportExportLimitExceededException(
     public int MatchingRows { get; } = matchingRows;
 }
 
-public sealed class ReportExportDataChangedException()
+public sealed class ReportExportDataChangedException(
+    int pageNumber,
+    int expectedTotalCount,
+    int actualTotalCount,
+    int collectedRowCount,
+    int receivedPageRowCount)
     : Exception(
         "Report data changed while the export was being prepared. Please try again.")
 {
+    public int PageNumber { get; } = pageNumber;
+    public int ExpectedTotalCount { get; } = expectedTotalCount;
+    public int ActualTotalCount { get; } = actualTotalCount;
+    public int CollectedRowCount { get; } = collectedRowCount;
+    public int ReceivedPageRowCount { get; } = receivedPageRowCount;
 }
