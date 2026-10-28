@@ -28,6 +28,7 @@ builder.Services.AddControllers()
             new JsonStringEnumConverter()));
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
+builder.Services.AddHealthChecks();
 builder.Services.AddSignalR();
 
 var loginPermitLimit = GetPositiveRateLimit(
@@ -308,6 +309,7 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapHealthChecks("/health/live");
 app.MapControllers();
 app.MapHub<WorkflowNotificationsHub>("/hubs/notifications")
     .RequireAuthorization();
