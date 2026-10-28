@@ -1,5 +1,7 @@
 using System.Data;
+using FlowDesk.Application.DTOs;
 using FlowDesk.Application.Interfaces;
+using FlowDesk.Application.Services;
 using FlowDesk.Domain.Entities;
 using FlowDesk.Domain.Enums;
 using FlowDesk.Infrastructure.Persistence;
@@ -14,6 +16,7 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
     private readonly AppDbContext context;
     private readonly IWorkflowNotificationPublisher publisher;
     private readonly ILogger<ApprovalWorkflowRepository> logger;
+    private readonly LeaveWorkflowAccounting leaveAccounting;
     private readonly bool emailEnabled;
 
     public ApprovalWorkflowRepository(
@@ -25,6 +28,7 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
         this.context = context;
         this.publisher = publisher;
         this.logger = logger;
+        leaveAccounting = new LeaveWorkflowAccounting(context);
         emailEnabled = bool.TryParse(
             configuration["Email:Enabled"],
             out var configuredEmailEnabled) &&
@@ -36,6 +40,7 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
         return context.ApprovalWorkflowRules
             .AsNoTracking()
             .Include(x => x.Department)
+            .Include(x => x.RequestType)
             .Include(x => x.Stages)
             .OrderBy(x => x.WorkflowKey)
             .ThenBy(x => x.Version)
@@ -46,6 +51,7 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
     {
         return context.ApprovalWorkflowRules
             .AsNoTracking()
+            .Include(x => x.RequestType)
             .Include(x => x.Stages)
             .Where(x => x.Status == ApprovalWorkflowRuleStatus.Active)
             .ToListAsync();
@@ -57,6 +63,7 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
     {
         var query = context.ApprovalWorkflowRules
             .Include(x => x.Department)
+            .Include(x => x.RequestType)
             .Include(x => x.Stages)
             .Where(x => x.Id == id);
         return tracked
@@ -64,14 +71,44 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             : query.AsNoTracking().FirstOrDefaultAsync();
     }
 
-    public async Task AddRuleAsync(ApprovalWorkflowRule rule)
+    public async Task AddRuleAsync(
+        ApprovalWorkflowRule rule,
+        int actorUserId)
     {
+        await using var transaction = await context.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
         await context.ApprovalWorkflowRules.AddAsync(rule);
+        await context.SaveChangesAsync();
+        context.AuditLogEntries.Add(new AuditLogEntry(
+            actorUserId,
+            "workflow_rule.created",
+            "WorkflowRule",
+            rule.Id,
+            DateTime.UtcNow));
+        await context.SaveChangesAsync();
+        await transaction.CommitAsync();
+    }
+
+    public async Task SaveRuleUpdateAsync(
+        ApprovalWorkflowRule rule,
+        int actorUserId)
+    {
+        await using var transaction = await context.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
+        context.AuditLogEntries.Add(new AuditLogEntry(
+            actorUserId,
+            "workflow_rule.updated",
+            "WorkflowRule",
+            rule.Id,
+            DateTime.UtcNow));
+        await context.SaveChangesAsync();
+        await transaction.CommitAsync();
     }
 
     public Task SaveChangesAsync() => context.SaveChangesAsync();
 
     public async Task ActivateRuleAsync(
+        int actorUserId,
         int id,
         Func<ApprovalWorkflowRule, IReadOnlyList<ApprovalWorkflowRule>, bool>
             hasConflict)
@@ -97,11 +134,17 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
         }
 
         candidate.Activate(DateTime.UtcNow);
+        context.AuditLogEntries.Add(new AuditLogEntry(
+            actorUserId,
+            "workflow_rule.activated",
+            "WorkflowRule",
+            id,
+            DateTime.UtcNow));
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
     }
 
-    public async Task DeactivateRuleAsync(int id)
+    public async Task DeactivateRuleAsync(int actorUserId, int id)
     {
         await using var transaction = await context.Database
             .BeginTransactionAsync(IsolationLevel.Serializable);
@@ -113,6 +156,12 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
         }
 
         rule.Deactivate();
+        context.AuditLogEntries.Add(new AuditLogEntry(
+            actorUserId,
+            "workflow_rule.deactivated",
+            "WorkflowRule",
+            id,
+            DateTime.UtcNow));
         await context.SaveChangesAsync();
         await transaction.CommitAsync();
     }
@@ -142,6 +191,7 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
                 "The selected workflow stage configuration changed.");
         }
 
+        await EnsureRequestTypeEnabledAsync(request);
         var approverIds = resolutions
             .Select(x => x.ApproverUserId)
             .Concat(resolutions
@@ -181,18 +231,34 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
 
             if (resolution.EscalationApproverUserId is int escalationUserId &&
                 (!managers.TryGetValue(escalationUserId, out var escalationManager) ||
-                 escalationManager.Role != UserRoles.Manager ||
+                 (escalationManager.Role != UserRoles.Manager &&
+                  escalationManager.Role != UserRoles.Admin) ||
                  !escalationManager.IsActive))
             {
                 throw new InvalidOperationException(
-                    "A configured escalation recipient is no longer an active Manager.");
+                    "A configured escalation recipient is no longer an active Manager or Admin.");
             }
         }
 
         context.ApprovalRequests.Add(request);
         await context.SaveChangesAsync();
+        if (request.CreatedByUserId is int actorUserId)
+        {
+            context.AuditLogEntries.Add(new AuditLogEntry(
+                actorUserId,
+                "request.created",
+                "ApprovalRequest",
+                request.Id,
+                DateTime.UtcNow,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    requestTypeId = request.RequestTypeId,
+                    priority = request.Priority?.ToString()
+                })));
+        }
 
         var nowUtc = DateTime.UtcNow;
+        await leaveAccounting.PersistRequestAsync(request, nowUtc);
         var workflowStages = resolutions
             .OrderBy(x => x.Sequence)
             .Select(x => new ApprovalWorkflowStage(
@@ -216,6 +282,21 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             workflowStages[0].ApproverUserId,
             workflowStages[0].Id));
         await context.SaveChangesAsync();
+        if (request.CreatedByUserId is int assignmentActorUserId)
+        {
+            context.AuditLogEntries.Add(new AuditLogEntry(
+                assignmentActorUserId,
+                "request.assigned",
+                "ApprovalRequest",
+                request.Id,
+                DateTime.UtcNow,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    approverUserId = workflowStages[0].ApproverUserId,
+                    assignmentType = "workflow"
+                })));
+            await context.SaveChangesAsync();
+        }
         var assignmentNotification = await AddNotificationAndEmailAsync(
             workflowStages[0].ApproverUserId,
             request.Id,
@@ -226,9 +307,408 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             managers[workflowStages[0].ApproverUserId].Email,
             $"Approval assigned: {request.Title}",
             $"Request REQ-{request.Id:D4} ({request.Title}) has been assigned to you for approval.");
+        var requestNotifications = new List<WorkflowNotification>
+        {
+            assignmentNotification
+        };
+        if (request.CreatedByUserId is int ownerId)
+        {
+            requestNotifications.Add(await AddNotificationAndEmailAsync(
+                ownerId,
+                request.Id,
+                WorkflowNotificationType.RequestSubmitted,
+                $"Your request REQ-{request.Id:D4} was submitted.",
+                $"request-submitted:{request.Id}",
+                nowUtc));
+        }
+
+        requestNotifications.AddRange(
+            await CreateAdminSubmissionNotificationsAsync(
+                request,
+                WorkflowNotificationType.RequestSubmitted,
+                nowUtc));
+
         await transaction.CommitAsync();
-        await PublishAfterCommitAsync([assignmentNotification]);
+        await PublishAfterCommitAsync(requestNotifications);
         return request;
+    }
+
+    public async Task<ApprovalRequest> CreateUnroutedRequestAsync(
+        ApprovalRequest request)
+    {
+        await using var transaction = await context.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
+        await EnsureRequestTypeEnabledAsync(request);
+        context.ApprovalRequests.Add(request);
+        await context.SaveChangesAsync();
+        if (request.CreatedByUserId is int actorUserId)
+        {
+            context.AuditLogEntries.Add(new AuditLogEntry(
+                actorUserId,
+                "request.created",
+                "ApprovalRequest",
+                request.Id,
+                DateTime.UtcNow,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    requestTypeId = request.RequestTypeId,
+                    priority = request.Priority?.ToString()
+                })));
+            await context.SaveChangesAsync();
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        await leaveAccounting.PersistRequestAsync(request, nowUtc);
+        var notifications = new List<WorkflowNotification>();
+        if (request.CreatedByUserId is int ownerId)
+        {
+            notifications.Add(await AddNotificationAndEmailAsync(
+                ownerId,
+                request.Id,
+                WorkflowNotificationType.RequestSubmitted,
+                $"Your request REQ-{request.Id:D4} was submitted and is awaiting Admin assignment.",
+                $"request-submitted:{request.Id}",
+                nowUtc));
+        }
+
+        notifications.AddRange(
+            await CreateAdminSubmissionNotificationsAsync(
+                request,
+                WorkflowNotificationType.RequestNeedsAdminAssignment,
+                nowUtc));
+
+        await transaction.CommitAsync();
+        await PublishAfterCommitAsync(notifications);
+        return request;
+    }
+
+    private async Task EnsureRequestTypeEnabledAsync(
+        ApprovalRequest request)
+    {
+        if (request.RequestTypeId is not int requestTypeId)
+        {
+            return;
+        }
+
+        var isEnabled = await context.RequestTypes
+            .AnyAsync(x => x.Id == requestTypeId && x.IsEnabled);
+        if (!isEnabled)
+        {
+            throw new InvalidOperationException(
+                "The selected request type is no longer enabled.");
+        }
+
+        if (request.RequestType is not null)
+        {
+            context.Entry(request.RequestType).State = EntityState.Unchanged;
+        }
+    }
+
+    private async Task<List<WorkflowNotification>>
+        CreateAdminSubmissionNotificationsAsync(
+            ApprovalRequest request,
+            WorkflowNotificationType type,
+            DateTime createdAtUtc)
+    {
+        var admins = await context.Users
+            .Where(user =>
+                user.Role == UserRoles.Admin &&
+                user.IsActive)
+            .ToListAsync();
+        if (admins.Count == 0)
+        {
+            logger.LogWarning(
+                "Request {RequestId} was submitted without an active Admin available for attention.",
+                request.Id);
+        }
+
+        var notifications = new List<WorkflowNotification>();
+        foreach (var admin in admins)
+        {
+            var deduplicationKey = type ==
+                WorkflowNotificationType.RequestNeedsAdminAssignment
+                ? $"manual-assignment-required:{request.Id}:{admin.Id}"
+                : $"request-submitted-admin:{request.Id}:{admin.Id}";
+            notifications.Add(await AddNotificationAndEmailAsync(
+                admin.Id,
+                request.Id,
+                type,
+                $"A new approval request \"{request.Title}\" has been submitted and requires attention.",
+                deduplicationKey,
+                createdAtUtc));
+        }
+
+        return notifications;
+    }
+
+    public async Task<AssignmentCreationResult> CreateManualAssignmentAsync(
+        int requestId,
+        int approverUserId,
+        int actorUserId)
+    {
+        await using var transaction = await context.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
+        var request = await context.ApprovalRequests
+            .SingleOrDefaultAsync(x =>
+                x.Id == requestId &&
+                x.CreatedByUserId != null &&
+                x.Status == RequestStatus.Pending);
+        if (request == null)
+        {
+            var exists = await context.ApprovalRequests
+                .AnyAsync(x => x.Id == requestId);
+            return exists
+                ? AssignmentCreationResult.Conflict
+                : AssignmentCreationResult.RequestNotFound;
+        }
+
+        var approver = await context.Users.SingleOrDefaultAsync(x =>
+            x.Id == approverUserId &&
+            x.Role == UserRoles.Manager &&
+            x.IsActive);
+        if (approver == null)
+        {
+            return AssignmentCreationResult.InvalidApprover;
+        }
+
+        var hasPendingAssignment = await context.ApprovalAssignments
+            .AnyAsync(x =>
+                x.RequestId == requestId &&
+                x.Status == ApprovalAssignmentStatus.Pending);
+        if (hasPendingAssignment)
+        {
+            return AssignmentCreationResult.Conflict;
+        }
+
+        context.ApprovalAssignments.Add(
+            new ApprovalAssignment(requestId, approverUserId));
+        context.AuditLogEntries.Add(new AuditLogEntry(
+            actorUserId,
+            "request.assigned",
+            "ApprovalRequest",
+            requestId,
+            DateTime.UtcNow,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                approverUserId,
+                assignmentType = "manual"
+            })));
+        await context.SaveChangesAsync();
+        var assignmentId = await context.ApprovalAssignments
+            .Where(x =>
+                x.RequestId == requestId &&
+                x.ApproverUserId == approverUserId &&
+                x.Status == ApprovalAssignmentStatus.Pending)
+            .OrderByDescending(x => x.Id)
+            .Select(x => x.Id)
+            .FirstAsync();
+        var notification = await AddNotificationAndEmailAsync(
+            approverUserId,
+            requestId,
+            WorkflowNotificationType.RequestAssigned,
+            $"Request REQ-{requestId:D4} has been assigned to you for approval.",
+            $"assignment:{assignmentId}",
+            DateTime.UtcNow,
+            approver.Email,
+            $"Approval assigned: {request.Title}",
+            $"Request REQ-{requestId:D4} ({request.Title}) has been assigned to you for approval.");
+        await transaction.CommitAsync();
+        await PublishAfterCommitAsync([notification]);
+        return AssignmentCreationResult.Created;
+    }
+
+    public async Task<ApprovalActionResult> DecideLegacyAssignmentAsync(
+        int requestId,
+        int managerUserId,
+        bool approve)
+    {
+        await using var transaction = await context.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
+        var lockedRequestRows = await LockPendingRequestAsync(requestId);
+        if (lockedRequestRows != 1)
+        {
+            return await context.ApprovalAssignments.AnyAsync(x =>
+                    x.RequestId == requestId &&
+                    x.ApproverUserId == managerUserId)
+                ? ApprovalActionResult.Conflict
+                : ApprovalActionResult.NotAssigned;
+        }
+
+        var request = await context.ApprovalRequests
+            .SingleOrDefaultAsync(x =>
+                x.Id == requestId &&
+                x.CreatedByUserId != null &&
+                x.Status == RequestStatus.Pending &&
+                x.Assignments.Any(a =>
+                    a.ApproverUserId == managerUserId &&
+                    a.Status == ApprovalAssignmentStatus.Pending));
+        if (request == null)
+        {
+            var assigned = await context.ApprovalAssignments.AnyAsync(x =>
+                x.RequestId == requestId &&
+                x.ApproverUserId == managerUserId);
+            return assigned
+                ? ApprovalActionResult.Conflict
+                : ApprovalActionResult.NotAssigned;
+        }
+
+        if (approve && await HasNonCleanAttachmentsAsync(requestId))
+        {
+            return ApprovalActionResult.AttachmentsNotClean;
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        var assignmentStatus = approve
+            ? ApprovalAssignmentStatus.Approved
+            : ApprovalAssignmentStatus.Rejected;
+        var requestStatus = approve
+            ? RequestStatus.Approved
+            : RequestStatus.Rejected;
+        var changedRequest = await context.ApprovalRequests
+            .Where(x =>
+                x.Id == requestId &&
+                x.Status == RequestStatus.Pending &&
+                x.Assignments.Any(a =>
+                    a.ApproverUserId == managerUserId &&
+                    a.Status == ApprovalAssignmentStatus.Pending))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, requestStatus));
+        var changedAssignment = await context.ApprovalAssignments
+            .Where(x =>
+                x.RequestId == requestId &&
+                x.ApproverUserId == managerUserId &&
+                x.Status == ApprovalAssignmentStatus.Pending)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, assignmentStatus)
+                .SetProperty(x => x.DecidedAtUtc, nowUtc));
+        if (changedRequest != 1 || changedAssignment != 1)
+        {
+            await transaction.RollbackAsync();
+            return ApprovalActionResult.Conflict;
+        }
+
+        await leaveAccounting.CompleteRequestAsync(
+            requestId,
+            approve,
+            nowUtc,
+            managerUserId);
+
+        WorkflowNotification? notification = null;
+        if (request.CreatedByUserId is int ownerId)
+        {
+            var owner = await context.Users.SingleOrDefaultAsync(x =>
+                x.Id == ownerId && x.IsActive);
+            if (owner != null)
+            {
+                var notificationType = approve
+                    ? WorkflowNotificationType.RequestApproved
+                    : WorkflowNotificationType.RequestRejected;
+                var message = approve
+                    ? $"Your request REQ-{requestId:D4} was approved."
+                    : $"Your request REQ-{requestId:D4} was rejected.";
+                notification = await AddNotificationAndEmailAsync(
+                    ownerId,
+                    requestId,
+                    notificationType,
+                    message,
+                    $"legacy-decision:{requestId}:{(approve ? "approved" : "rejected")}",
+                    nowUtc,
+                    owner.Email,
+                    $"Request decision: {request.Title}",
+                    message);
+            }
+        }
+
+        context.AuditLogEntries.Add(new AuditLogEntry(
+            managerUserId,
+            approve ? "request.approved" : "request.rejected",
+            "ApprovalRequest",
+            requestId,
+            nowUtc));
+        await context.SaveChangesAsync();
+        await transaction.CommitAsync();
+        if (notification != null)
+        {
+            await PublishAfterCommitAsync([notification]);
+        }
+
+        return ApprovalActionResult.Success;
+    }
+
+    public async Task<RequestCancellationResult> CancelUnroutedRequestAsync(
+        int requestId,
+        int ownerUserId)
+    {
+        await using var transaction = await context.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
+        var request = await context.ApprovalRequests
+            .SingleOrDefaultAsync(x =>
+                x.Id == requestId &&
+                x.CreatedByUserId == ownerUserId &&
+                x.Status == RequestStatus.Pending);
+        if (request == null)
+        {
+            var isOwned = await context.ApprovalRequests.AnyAsync(x =>
+                x.Id == requestId &&
+                x.CreatedByUserId == ownerUserId);
+            return isOwned
+                ? RequestCancellationResult.Conflict
+                : RequestCancellationResult.NotFound;
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        var approvers = await context.ApprovalAssignments
+            .Where(x =>
+                x.RequestId == requestId &&
+                x.Status == ApprovalAssignmentStatus.Pending)
+            .Select(x => x.ApproverUser)
+            .Where(x => x.IsActive)
+            .Distinct()
+            .ToListAsync();
+        var changed = await context.ApprovalRequests
+            .Where(x =>
+                x.Id == requestId &&
+                x.CreatedByUserId == ownerUserId &&
+                x.Status == RequestStatus.Pending)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, RequestStatus.Cancelled));
+        if (changed != 1)
+        {
+            await transaction.RollbackAsync();
+            return RequestCancellationResult.Conflict;
+        }
+
+        await leaveAccounting.ReleaseReservationAsync(
+            requestId,
+            DateOnly.FromDateTime(nowUtc),
+            ownerUserId);
+
+        await context.ApprovalAssignments
+            .Where(x =>
+                x.RequestId == requestId &&
+                x.Status == ApprovalAssignmentStatus.Pending)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, ApprovalAssignmentStatus.Cancelled)
+                .SetProperty(x => x.DecidedAtUtc, nowUtc));
+
+        var notifications = new List<WorkflowNotification>();
+        foreach (var approver in approvers)
+        {
+            notifications.Add(await AddNotificationAndEmailAsync(
+                approver.Id,
+                requestId,
+                WorkflowNotificationType.RequestCancelled,
+                $"Request REQ-{requestId:D4} was cancelled by its requester.",
+                $"cancel:{requestId}:{approver.Id}",
+                nowUtc,
+                approver.Email,
+                $"Request cancelled: {request.Title}",
+                $"Request REQ-{requestId:D4} ({request.Title}) was cancelled by its requester."));
+        }
+
+        await transaction.CommitAsync();
+        await PublishAfterCommitAsync(notifications);
+        return RequestCancellationResult.Success;
     }
 
     public Task<bool> HasWorkflowAsync(int requestId)
@@ -260,6 +740,11 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
     {
         await using var transaction = await context.Database
             .BeginTransactionAsync(IsolationLevel.Serializable);
+        if (approve && await LockPendingRequestAsync(requestId) != 1)
+        {
+            return WorkflowDecisionResult.Conflict;
+        }
+
         var instance = await context.ApprovalWorkflowInstances
             .Include(x => x.WorkflowRule)
             .Include(x => x.Request)
@@ -293,6 +778,11 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             activeStage.ApproverUserId != managerUserId)
         {
             return WorkflowDecisionResult.NotAssigned;
+        }
+
+        if (approve && await HasNonCleanAttachmentsAsync(requestId))
+        {
+            return WorkflowDecisionResult.AttachmentsNotClean;
         }
 
         var nowUtc = DateTime.UtcNow;
@@ -338,6 +828,17 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             stageDecision,
             comment,
             nowUtc));
+        context.AuditLogEntries.Add(new AuditLogEntry(
+            managerUserId,
+            "request.approval_stage_decided",
+            "ApprovalRequest",
+            requestId,
+            nowUtc,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                decision = approve ? "approved" : "rejected",
+                stage = activeStage.Sequence
+            })));
 
         if (!approve)
         {
@@ -389,6 +890,29 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             }
         }
 
+        if (!approve ||
+            instance.Status == ApprovalWorkflowStatus.Approved)
+        {
+            await leaveAccounting.CompleteRequestAsync(
+                requestId,
+                approve,
+                nowUtc,
+                managerUserId);
+        }
+
+        if (instance.Status is ApprovalWorkflowStatus.Approved or
+            ApprovalWorkflowStatus.Rejected)
+        {
+            context.AuditLogEntries.Add(new AuditLogEntry(
+                managerUserId,
+                instance.Status == ApprovalWorkflowStatus.Approved
+                    ? "request.approved"
+                    : "request.rejected",
+                "ApprovalRequest",
+                requestId,
+                nowUtc));
+        }
+
         await context.SaveChangesAsync();
         if (approve &&
             instance.Status == ApprovalWorkflowStatus.Active)
@@ -399,6 +923,17 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
                 requestId,
                 nextStage.ApproverUserId,
                 nextStage.Id));
+            context.AuditLogEntries.Add(new AuditLogEntry(
+                managerUserId,
+                "request.assigned",
+                "ApprovalRequest",
+                requestId,
+                nowUtc,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    approverUserId = nextStage.ApproverUserId,
+                    assignmentType = "workflow-stage"
+                })));
             await context.SaveChangesAsync();
             createdNotifications.Add(await AddNotificationAndEmailAsync(
                 nextStage.ApproverUserId,
@@ -449,6 +984,24 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
         return WorkflowDecisionResult.Success;
     }
 
+    private Task<int> LockPendingRequestAsync(int requestId)
+    {
+        return context.ApprovalRequests
+            .Where(x =>
+                x.Id == requestId &&
+                x.Status == RequestStatus.Pending)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, RequestStatus.Pending));
+    }
+
+    private Task<bool> HasNonCleanAttachmentsAsync(int requestId)
+    {
+        return context.RequestAttachments.AnyAsync(x =>
+            x.RequestId == requestId &&
+            x.DeletedAtUtc == null &&
+            x.ScanStatus != AttachmentScanStatus.Clean);
+    }
+
     public async Task<RequestCancellationResult> CancelWorkflowAsync(
         int requestId,
         int ownerUserId)
@@ -487,6 +1040,11 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
             await transaction.RollbackAsync();
             return RequestCancellationResult.Conflict;
         }
+
+        await leaveAccounting.ReleaseReservationAsync(
+            requestId,
+            DateOnly.FromDateTime(nowUtc),
+            ownerUserId);
 
         var instance = await context.ApprovalWorkflowInstances
             .Include(x => x.Stages)
@@ -553,6 +1111,8 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
                 x.ActivatedAtUtc.HasValue &&
                 x.EscalationAfterMinutes.HasValue &&
                 x.EscalationApproverUserId.HasValue &&
+                x.WorkflowInstance.Status == ApprovalWorkflowStatus.Active &&
+                x.WorkflowInstance.Request.Status == RequestStatus.Pending &&
                 !x.Escalations.Any())
             .OrderBy(x => x.ActivatedAtUtc)
             .Take(200)
@@ -569,7 +1129,7 @@ public sealed class ApprovalWorkflowRepository : IApprovalWorkflowRepository
         var activeRecipients = await context.Users
             .Where(x =>
                 recipientIds.Contains(x.Id) &&
-                x.Role == UserRoles.Manager &&
+                (x.Role == UserRoles.Manager || x.Role == UserRoles.Admin) &&
                 x.IsActive)
             .ToDictionaryAsync(x => x.Id);
 

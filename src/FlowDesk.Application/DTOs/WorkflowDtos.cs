@@ -17,6 +17,7 @@ public sealed class WorkflowRuleInputDto
 {
     public string WorkflowKey { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public int? RequestTypeId { get; set; }
     public int? DepartmentId { get; set; }
     public decimal MinimumAmount { get; set; }
     public decimal? MaximumAmountExclusive { get; set; }
@@ -30,6 +31,9 @@ public sealed class WorkflowRuleResponseDto
     public string WorkflowKey { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public int Version { get; set; }
+    public int? RequestTypeId { get; set; }
+    public string? RequestTypeCode { get; set; }
+    public string? RequestTypeName { get; set; }
     public int? DepartmentId { get; set; }
     public string? DepartmentName { get; set; }
     public decimal MinimumAmount { get; set; }

@@ -11,21 +11,41 @@ public interface IApprovalWorkflowRepository
 
     Task<ApprovalWorkflowRule?> GetRuleAsync(int id, bool tracked = false);
 
-    Task AddRuleAsync(ApprovalWorkflowRule rule);
+    Task AddRuleAsync(ApprovalWorkflowRule rule, int actorUserId);
+
+    Task SaveRuleUpdateAsync(ApprovalWorkflowRule rule, int actorUserId);
 
     Task SaveChangesAsync();
 
     Task ActivateRuleAsync(
+        int actorUserId,
         int id,
         Func<ApprovalWorkflowRule, IReadOnlyList<ApprovalWorkflowRule>, bool>
             hasConflict);
 
-    Task DeactivateRuleAsync(int id);
+    Task DeactivateRuleAsync(int actorUserId, int id);
 
     Task<ApprovalRequest> CreateRoutedRequestAsync(
         ApprovalRequest request,
         int workflowRuleId,
         IReadOnlyList<WorkflowStageResolution> stages);
+
+    Task<ApprovalRequest> CreateUnroutedRequestAsync(
+        ApprovalRequest request);
+
+    Task<AssignmentCreationResult> CreateManualAssignmentAsync(
+        int requestId,
+        int approverUserId,
+        int actorUserId);
+
+    Task<ApprovalActionResult> DecideLegacyAssignmentAsync(
+        int requestId,
+        int managerUserId,
+        bool approve);
+
+    Task<RequestCancellationResult> CancelUnroutedRequestAsync(
+        int requestId,
+        int ownerUserId);
 
     Task<bool> HasWorkflowAsync(int requestId);
 

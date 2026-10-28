@@ -1,11 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using FlowDesk.Application.Interfaces;
 using FlowDesk.Domain.Entities;
 using FlowDesk.Domain.Enums;
 using FlowDesk.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -19,7 +22,19 @@ public sealed class ApprovalWorkflowTests
         using var factory = new ApiFactory();
         await factory.InitializeDatabaseAsync();
         var employee = await factory.AddUserAsync();
+        var inactiveAdmin = await factory.AddUserAsync(UserRoles.Admin);
+        inactiveAdmin.SetActive(false);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var context = scope.ServiceProvider
+                .GetRequiredService<AppDbContext>();
+            context.Users.Update(inactiveAdmin);
+            await context.SaveChangesAsync();
+        }
+        var managerWithoutAdminRole = await factory.AddUserAsync(
+            UserRoles.Manager);
         var otherEmployee = await factory.AddUserAsync();
+        var admin = await factory.AddUserAsync(UserRoles.Admin);
         using var unauthenticatedClient = factory.CreateClient();
         using var deniedNegotiation = await unauthenticatedClient.PostAsync(
             "/hubs/notifications/negotiate?negotiateVersion=1",
@@ -31,6 +46,12 @@ public sealed class ApprovalWorkflowTests
         using var otherClient = factory.CreateAuthorizedClient(
             otherEmployee.Id,
             UserRoles.Employee);
+        using var adminClient = factory.CreateAuthorizedClient(
+            admin.Id,
+            UserRoles.Admin);
+        using var managerClient = factory.CreateAuthorizedClient(
+            managerWithoutAdminRole.Id,
+            UserRoles.Manager);
         using var authorizedNegotiation = await employeeClient.PostAsync(
             "/hubs/notifications/negotiate?negotiateVersion=1",
             content: null);
@@ -66,6 +87,41 @@ public sealed class ApprovalWorkflowTests
         using var otherNotifications = JsonDocument.Parse(
             await otherNotificationsResponse.Content.ReadAsStringAsync());
         Assert.Empty(otherNotifications.RootElement
+            .GetProperty("items")
+            .EnumerateArray());
+        using var adminNotificationsResponse = await adminClient.GetAsync(
+            "/api/notifications?pageSize=100");
+        using var adminNotifications = JsonDocument.Parse(
+            await adminNotificationsResponse.Content.ReadAsStringAsync());
+        var adminNotification = Assert.Single(
+            adminNotifications.RootElement.GetProperty("items")
+                .EnumerateArray(),
+            x => x.GetProperty("type").GetString() ==
+                "RequestNeedsAdminAssignment");
+        Assert.Equal(
+            requestId,
+            adminNotification.GetProperty("requestId").GetInt32());
+        Assert.Contains(
+            "A new approval request \"Notification request\"",
+            adminNotification.GetProperty("message").GetString());
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var context = scope.ServiceProvider
+                .GetRequiredService<AppDbContext>();
+            var requestRecipients = await context.WorkflowNotifications
+                .AsNoTracking()
+                .Where(item => item.RequestId == requestId)
+                .Select(item => item.RecipientUserId)
+                .ToListAsync();
+            Assert.DoesNotContain(inactiveAdmin.Id, requestRecipients);
+        }
+
+        using var managerNotificationsResponse = await managerClient.GetAsync(
+            "/api/notifications");
+        using var managerNotifications = JsonDocument.Parse(
+            await managerNotificationsResponse.Content.ReadAsStringAsync());
+        Assert.Empty(managerNotifications.RootElement
             .GetProperty("items")
             .EnumerateArray());
 
@@ -268,6 +324,338 @@ public sealed class ApprovalWorkflowTests
                 workflow.Stages.Single(x => x.Sequence == 2)
                     .DecisionHistory!.Comment);
         }
+    }
+
+    [Fact]
+    public async Task Approval_IsBlockedUntilAttachmentsAreClean_AndAdminCannotApprove()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var admin = await factory.AddUserAsync(UserRoles.Admin);
+        var employee = await factory.AddUserAsync();
+        var manager = await factory.AddUserAsync(UserRoles.Manager);
+        using var adminClient = factory.CreateAuthorizedClient(
+            admin.Id,
+            UserRoles.Admin);
+        using var employeeClient = factory.CreateAuthorizedClient(
+            employee.Id,
+            UserRoles.Employee);
+        using var managerClient = factory.CreateAuthorizedClient(
+            manager.Id,
+            UserRoles.Manager);
+
+        var workflowId = await CreateWorkflowAsync(
+            adminClient,
+            $"attachment-gate-{Guid.NewGuid():N}",
+            departmentId: null,
+            [Stage(1, manager.Id)]);
+        using var activate = await adminClient.PostAsync(
+            $"/api/admin/workflows/{workflowId}/activate",
+            content: null);
+        Assert.Equal(HttpStatusCode.NoContent, activate.StatusCode);
+
+        using var createWithAttachmentRequest =
+            await employeeClient.PostAsJsonAsync(
+                "/api/requests",
+                new { title = "Pending scan approval", amount = 45m });
+        Assert.Equal(
+            HttpStatusCode.Created,
+            createWithAttachmentRequest.StatusCode);
+        using var created = JsonDocument.Parse(
+            await createWithAttachmentRequest.Content.ReadAsStringAsync());
+        var requestId = created.RootElement.GetProperty("id").GetInt32();
+        var attachmentId = await AddPendingAttachmentAsync(
+            factory,
+            requestId,
+            employee.Id);
+
+        using var adminDecision = await adminClient.PatchAsync(
+            $"/api/requests/{requestId}/approve",
+            content: null);
+        Assert.Equal(HttpStatusCode.Forbidden, adminDecision.StatusCode);
+
+        using var blockedDecision = await managerClient.PatchAsJsonAsync(
+            $"/api/requests/{requestId}/approve",
+            new { comment = "Reviewing supporting documents" });
+        Assert.Equal(HttpStatusCode.Conflict, blockedDecision.StatusCode);
+        Assert.Contains(
+            "every request attachment",
+            await blockedDecision.Content.ReadAsStringAsync());
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var context = scope.ServiceProvider
+                .GetRequiredService<AppDbContext>();
+            var attachment = await context.RequestAttachments
+                .SingleAsync(x => x.Id == attachmentId);
+            attachment.MarkScanned(
+                true,
+                "TestScanner",
+                DateTime.UtcNow);
+            await context.SaveChangesAsync();
+        }
+
+        using var cleanDecision = await managerClient.PatchAsJsonAsync(
+            $"/api/requests/{requestId}/approve",
+            new { comment = "All supporting documents are clean" });
+        Assert.Equal(HttpStatusCode.OK, cleanDecision.StatusCode);
+
+        using var createWithoutAttachments =
+            await employeeClient.PostAsJsonAsync(
+                "/api/requests",
+                new { title = "No supporting documents", amount = 10m });
+        Assert.Equal(
+            HttpStatusCode.Created,
+            createWithoutAttachments.StatusCode);
+        using var withoutAttachmentDocument = JsonDocument.Parse(
+            await createWithoutAttachments.Content.ReadAsStringAsync());
+        var noAttachmentRequestId = withoutAttachmentDocument.RootElement
+            .GetProperty("id")
+            .GetInt32();
+        using var noAttachmentDecision = await managerClient.PatchAsJsonAsync(
+            $"/api/requests/{noAttachmentRequestId}/approve",
+            new { comment = "No attachments are required" });
+        Assert.Equal(HttpStatusCode.OK, noAttachmentDecision.StatusCode);
+    }
+
+    [Fact]
+    public async Task LegacyApproval_IsBlockedForPendingAttachments()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var employee = await factory.AddUserAsync();
+        var manager = await factory.AddUserAsync(UserRoles.Manager);
+        var request = await factory.AddRequestAsync(employee.Id);
+        await factory.AddAssignmentAsync(request.Id, manager.Id);
+        await AddPendingAttachmentAsync(factory, request.Id, employee.Id);
+        using var managerClient = factory.CreateAuthorizedClient(
+            manager.Id,
+            UserRoles.Manager);
+
+        using var decision = await managerClient.PatchAsJsonAsync(
+            $"/api/requests/{request.Id}/approve",
+            new { comment = "Pending scan" });
+
+        Assert.Equal(HttpStatusCode.Conflict, decision.StatusCode);
+        using var scope = factory.Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var current = await context.ApprovalRequests
+            .SingleAsync(x => x.Id == request.Id);
+        Assert.Equal(RequestStatus.Pending, current.Status);
+        var directDecision = await scope.ServiceProvider
+            .GetRequiredService<IApprovalRequestRepository>()
+            .DecideAssignedRequestAsync(
+                request.Id,
+                manager.Id,
+                approve: true);
+        Assert.Equal(
+            ApprovalActionResult.AttachmentsNotClean,
+            directDecision);
+    }
+
+    [Fact]
+    public async Task ThreeStageWorkflow_ActivatesOneApproverAtATimeAndNotifiesEachRecipient()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var admin = await factory.AddUserAsync(UserRoles.Admin);
+        var employee = await factory.AddUserAsync();
+        var managers = new[]
+        {
+            await factory.AddUserAsync(UserRoles.Manager),
+            await factory.AddUserAsync(UserRoles.Manager),
+            await factory.AddUserAsync(UserRoles.Manager)
+        };
+        using var adminClient = factory.CreateAuthorizedClient(
+            admin.Id,
+            UserRoles.Admin);
+        using var employeeClient = factory.CreateAuthorizedClient(
+            employee.Id,
+            UserRoles.Employee);
+        var managerClients = new[]
+        {
+            factory.CreateAuthorizedClient(managers[0].Id, UserRoles.Manager),
+            factory.CreateAuthorizedClient(managers[1].Id, UserRoles.Manager),
+            factory.CreateAuthorizedClient(managers[2].Id, UserRoles.Manager)
+        };
+
+        var workflowId = await CreateWorkflowAsync(
+            adminClient,
+            $"three-stage-{Guid.NewGuid():N}",
+            departmentId: null,
+            [
+                Stage(1, managers[0].Id),
+                Stage(2, managers[1].Id),
+                Stage(3, managers[2].Id)
+            ],
+            priority: RequestPriority.High);
+        using var activate = await adminClient.PostAsync(
+            $"/api/admin/workflows/{workflowId}/activate",
+            content: null);
+        Assert.Equal(HttpStatusCode.NoContent, activate.StatusCode);
+
+        using var createRequest = await employeeClient.PostAsJsonAsync(
+            "/api/requests",
+            new
+            {
+                title = "Three-stage approval test",
+                amount = 150000m,
+                priority = RequestPriority.High
+            });
+        Assert.Equal(HttpStatusCode.Created, createRequest.StatusCode);
+        using var created = JsonDocument.Parse(
+            await createRequest.Content.ReadAsStringAsync());
+        var requestId = created.RootElement.GetProperty("id").GetInt32();
+
+        var adminNotifications = await adminClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        var adminSubmissionNotification = Assert.Single(
+            adminNotifications.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("requestId").GetInt32() == requestId &&
+                item.GetProperty("type").GetString() == "RequestSubmitted");
+        Assert.Contains(
+            "A new approval request \"Three-stage approval test\"",
+            adminSubmissionNotification.GetProperty("message").GetString());
+        Assert.Equal(
+            1,
+            adminNotifications.GetProperty("items").EnumerateArray().Count(
+                item => item.GetProperty("requestId").GetInt32() == requestId));
+
+        using var futureStageAttempt = await managerClients[2].PatchAsJsonAsync(
+            $"/api/requests/{requestId}/approve",
+            new { comment = "Too early" });
+        Assert.Equal(HttpStatusCode.NotFound, futureStageAttempt.StatusCode);
+
+        for (var index = 0; index < managerClients.Length; index++)
+        {
+            var managerNotifications = await managerClients[index]
+                .GetFromJsonAsync<JsonElement>("/api/notifications");
+            Assert.Contains(
+                managerNotifications.GetProperty("items").EnumerateArray(),
+                item => item.GetProperty("requestId").GetInt32() == requestId &&
+                    item.GetProperty("type").GetString() is
+                        "RequestAssigned" or "StageAdvanced");
+
+            using var decision = await managerClients[index].PatchAsJsonAsync(
+                $"/api/requests/{requestId}/approve",
+                new { comment = $"Stage {index + 1} approved" });
+            Assert.Equal(HttpStatusCode.OK, decision.StatusCode);
+
+            if (index == 0)
+            {
+                using var premature = await managerClients[2]
+                    .PatchAsJsonAsync(
+                        $"/api/requests/{requestId}/approve",
+                        new { comment = "Third stage is not active yet" });
+                Assert.Equal(HttpStatusCode.NotFound, premature.StatusCode);
+            }
+        }
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var context = scope.ServiceProvider
+                .GetRequiredService<AppDbContext>();
+            var request = await context.ApprovalRequests
+                .SingleAsync(x => x.Id == requestId);
+            Assert.Equal(RequestStatus.Approved, request.Status);
+            var stages = await context.ApprovalWorkflowStages
+                .Include(x => x.DecisionHistory)
+                .Where(x => x.WorkflowInstance.RequestId == requestId)
+                .OrderBy(x => x.Sequence)
+                .ToListAsync();
+            Assert.Equal(3, stages.Count);
+            Assert.All(stages, stage =>
+            {
+                Assert.Equal(ApprovalWorkflowStageStatus.Approved, stage.Status);
+                Assert.NotNull(stage.DecisionHistory);
+                Assert.NotNull(stage.DecidedAtUtc);
+            });
+        }
+
+        var employeeNotifications = await employeeClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        Assert.Contains(
+            employeeNotifications.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("type").GetString() == "RequestApproved" &&
+                item.GetProperty("requestId").GetInt32() == requestId);
+        adminNotifications = await adminClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        Assert.Equal(
+            1,
+            adminNotifications.GetProperty("items").EnumerateArray().Count(
+                item => item.GetProperty("requestId").GetInt32() == requestId));
+        var employeeRequests = await employeeClient
+            .GetFromJsonAsync<JsonElement[]>("/api/requests");
+        Assert.Equal(
+            "Approved",
+            employeeRequests!.Single(item =>
+                item.GetProperty("id").GetInt32() == requestId)
+                .GetProperty("status")
+                .GetString());
+        using var employeeRequestDetails = await employeeClient.GetAsync(
+            $"/api/requests/{requestId}");
+        Assert.Equal(HttpStatusCode.OK, employeeRequestDetails.StatusCode);
+        using var employeeRequestDetailsDocument = JsonDocument.Parse(
+            await employeeRequestDetails.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "Approved",
+            employeeRequestDetailsDocument.RootElement
+                .GetProperty("status")
+                .GetString());
+        foreach (var client in managerClients)
+        {
+            client.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Assignment_QueuesEmailOnlyForTheAssignedApproverWhenEnabled()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var configuration = factory.Services
+            .GetRequiredService<IConfiguration>();
+        configuration["Email:Enabled"] = "true";
+
+        var admin = await factory.AddUserAsync(UserRoles.Admin);
+        var employee = await factory.AddUserAsync();
+        var manager = await factory.AddUserAsync(UserRoles.Manager);
+        using var adminClient = factory.CreateAuthorizedClient(
+            admin.Id,
+            UserRoles.Admin);
+        using var employeeClient = factory.CreateAuthorizedClient(
+            employee.Id,
+            UserRoles.Employee);
+
+        var workflowId = await CreateWorkflowAsync(
+            adminClient,
+            $"email-outbox-{Guid.NewGuid():N}",
+            departmentId: null,
+            [Stage(1, manager.Id)]);
+        using var activate = await adminClient.PostAsync(
+            $"/api/admin/workflows/{workflowId}/activate",
+            content: null);
+        Assert.Equal(HttpStatusCode.NoContent, activate.StatusCode);
+        using var createRequest = await employeeClient.PostAsJsonAsync(
+            "/api/requests",
+            new { title = "Assigned email test", amount = 300m });
+        Assert.Equal(HttpStatusCode.Created, createRequest.StatusCode);
+        using var created = JsonDocument.Parse(
+            await createRequest.Content.ReadAsStringAsync());
+        var requestId = created.RootElement.GetProperty("id").GetInt32();
+
+        using var scope = factory.Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var email = await context.WorkflowEmailOutbox.SingleAsync();
+        Assert.Equal(manager.Id, email.RecipientUserId);
+        Assert.Equal(manager.Email, email.RecipientEmail);
+        Assert.Equal(
+            $"assignment:{await context.ApprovalAssignments
+                .Where(x => x.RequestId == requestId)
+                .Select(x => x.WorkflowStageId)
+                .SingleAsync()}",
+            email.DeduplicationKey);
+        Assert.Null(email.SentAtUtc);
     }
 
     [Fact]
@@ -537,6 +925,81 @@ public sealed class ApprovalWorkflowTests
     }
 
     [Fact]
+    public async Task Escalation_CanNotifyConfiguredAdminWithoutNotifyingOtherAdmins()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var admin = await factory.AddUserAsync(UserRoles.Admin);
+        var otherAdmin = await factory.AddUserAsync(UserRoles.Admin);
+        var employee = await factory.AddUserAsync();
+        var manager = await factory.AddUserAsync(UserRoles.Manager);
+        using var adminClient = factory.CreateAuthorizedClient(
+            admin.Id,
+            UserRoles.Admin);
+        using var otherAdminClient = factory.CreateAuthorizedClient(
+            otherAdmin.Id,
+            UserRoles.Admin);
+        using var employeeClient = factory.CreateAuthorizedClient(
+            employee.Id,
+            UserRoles.Employee);
+        using var managerClient = factory.CreateAuthorizedClient(
+            manager.Id,
+            UserRoles.Manager);
+
+        var workflowId = await CreateWorkflowAsync(
+            adminClient,
+            $"admin-escalation-{Guid.NewGuid():N}",
+            departmentId: null,
+            [Stage(1, manager.Id, admin.Id)]);
+        using var activate = await adminClient.PostAsync(
+            $"/api/admin/workflows/{workflowId}/activate",
+            content: null);
+        Assert.Equal(HttpStatusCode.NoContent, activate.StatusCode);
+        using var createRequest = await employeeClient.PostAsJsonAsync(
+            "/api/requests",
+            new { title = "Admin escalation test", amount = 90m });
+        Assert.Equal(HttpStatusCode.Created, createRequest.StatusCode);
+        using var created = JsonDocument.Parse(
+            await createRequest.Content.ReadAsStringAsync());
+        var requestId = created.RootElement.GetProperty("id").GetInt32();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var stageId = await context.ApprovalWorkflowStages
+                .Where(x => x.WorkflowInstance.RequestId == requestId)
+                .Select(x => x.Id)
+                .SingleAsync();
+            var activatedAtUtc = DateTime.UtcNow.AddHours(-2);
+            await context.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE ApprovalWorkflowStages SET ActivatedAtUtc = {activatedAtUtc} WHERE Id = {stageId}");
+        }
+
+        using var process = await adminClient.PostAsync(
+            "/api/admin/workflows/process-escalations",
+            content: null);
+        Assert.Equal(HttpStatusCode.OK, process.StatusCode);
+        var adminNotifications = await adminClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        Assert.Contains(
+            adminNotifications.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("type").GetString() == "Escalation" &&
+                item.GetProperty("requestId").GetInt32() == requestId);
+        var otherAdminNotifications = await otherAdminClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        Assert.DoesNotContain(
+            otherAdminNotifications.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("type").GetString() == "Escalation" &&
+                item.GetProperty("requestId").GetInt32() == requestId);
+        var assignedManagerNotifications = await managerClient
+            .GetFromJsonAsync<JsonElement>("/api/notifications");
+        Assert.DoesNotContain(
+            assignedManagerNotifications.GetProperty("items")
+                .EnumerateArray(),
+            item => item.GetProperty("type").GetString() == "Escalation");
+    }
+
+    [Fact]
     public async Task NewRequest_IsNotCreatedWhenActiveRuleManagerHasBeenDeactivated()
     {
         using var factory = new ApiFactory();
@@ -624,5 +1087,37 @@ public sealed class ApprovalWorkflowTests
         var user = await context.Users.SingleAsync(x => x.Id == userId);
         user.ChangeDepartment(departmentId);
         await context.SaveChangesAsync();
+    }
+
+    private static async Task<long> AddPendingAttachmentAsync(
+        ApiFactory factory,
+        int requestId,
+        int ownerId)
+    {
+        var bytes = Encoding.ASCII.GetBytes("%PDF-1.7\napproval gate test");
+        var storageKey = Guid.NewGuid();
+        await factory.Services.GetRequiredService<IPrivateFileStorage>()
+            .SaveAsync(
+                PrivateFileArea.RequestAttachments,
+                storageKey,
+                "pdf",
+                new MemoryStream(bytes),
+                CancellationToken.None);
+        using var scope = factory.Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var attachment = new RequestAttachment(
+            requestId,
+            ownerId,
+            storageKey,
+            Guid.NewGuid(),
+            "approval-test.pdf",
+            "pdf",
+            "application/pdf",
+            bytes.Length,
+            Convert.ToHexString(SHA256.HashData(bytes)),
+            DateTime.UtcNow);
+        context.RequestAttachments.Add(attachment);
+        await context.SaveChangesAsync();
+        return attachment.Id;
     }
 }

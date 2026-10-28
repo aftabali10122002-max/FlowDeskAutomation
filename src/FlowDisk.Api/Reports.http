@@ -1,0 +1,22 @@
+@baseUrl = https://localhost:5001
+@token = replace-with-a-development-token
+
+### Request report
+GET {{baseUrl}}/api/reports/requests?page=1&pageSize=20&sortBy=createdAtUtc&sortDirection=desc
+Authorization: Bearer {{token}}
+
+### Approval history
+GET {{baseUrl}}/api/reports/approval-history?page=1&pageSize=20&sortBy=decidedAtUtc&sortDirection=desc
+Authorization: Bearer {{token}}
+
+### Workflow performance
+GET {{baseUrl}}/api/reports/workflow-performance?page=1&pageSize=20&sortBy=startedAtUtc&sortDirection=desc
+Authorization: Bearer {{token}}
+
+### Leave report
+GET {{baseUrl}}/api/reports/leave?page=1&pageSize=20&sortBy=startDate&sortDirection=desc
+Authorization: Bearer {{token}}
+
+### Filter options (role-scoped)
+GET {{baseUrl}}/api/reports/filter-options
+Authorization: Bearer {{token}}

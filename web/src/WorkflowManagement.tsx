@@ -5,6 +5,7 @@ import {
   createWorkflowRule,
   createWorkflowVersion,
   deactivateWorkflow,
+  getAdminRequestTypes,
   getWorkflowRules,
   processWorkflowEscalations,
   updateWorkflowDraft,
@@ -13,6 +14,7 @@ import {
   type WorkflowRule,
   type WorkflowRuleInput,
   type WorkflowRuleStage,
+  type RequestType,
 } from './api'
 import './WorkflowManagement.css'
 
@@ -31,9 +33,10 @@ const blankStage = (sequence: number): WorkflowRuleStage => ({
   escalationApproverUserId: null,
 })
 
-const blankInput = (): WorkflowRuleInput => ({
+const blankInput = (requestTypeId: number | null = null): WorkflowRuleInput => ({
   workflowKey: '',
   name: '',
+  requestTypeId,
   departmentId: null,
   minimumAmount: 0,
   maximumAmountExclusive: null,
@@ -45,6 +48,7 @@ function fromRule(rule: WorkflowRule): WorkflowRuleInput {
   return {
     workflowKey: rule.workflowKey,
     name: rule.name,
+    requestTypeId: rule.requestTypeId ?? null,
     departmentId: rule.departmentId,
     minimumAmount: rule.minimumAmount,
     maximumAmountExclusive: rule.maximumAmountExclusive,
@@ -59,6 +63,7 @@ function errorMessage(error: unknown) {
 
 export function WorkflowManagement({ departments, users }: Props) {
   const [rules, setRules] = useState<WorkflowRule[]>([])
+  const [requestTypes, setRequestTypes] = useState<RequestType[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [input, setInput] = useState<WorkflowRuleInput>(blankInput)
   const [loading, setLoading] = useState(true)
@@ -73,9 +78,13 @@ export function WorkflowManagement({ departments, users }: Props) {
   const refresh = useCallback(async (preferredId?: number) => {
     setLoading(true)
     try {
-      const data = await getWorkflowRules()
+      const [data, availableTypes] = await Promise.all([
+        getWorkflowRules(),
+        getAdminRequestTypes(),
+      ])
       setError('')
       setRules(data)
+      setRequestTypes(availableTypes)
       const nextId = preferredId && data.some((item) => item.id === preferredId)
         ? preferredId
         : selectedId && data.some((item) => item.id === selectedId)
@@ -83,7 +92,9 @@ export function WorkflowManagement({ departments, users }: Props) {
           : data[0]?.id ?? null
       setSelectedId(nextId)
       const nextRule = data.find((item) => item.id === nextId)
-      setInput(nextRule ? fromRule(nextRule) : blankInput())
+      setInput(nextRule
+        ? fromRule(nextRule)
+        : blankInput(availableTypes.find((type) => type.isEnabled)?.id ?? null))
     } catch (caught) {
       setError(errorMessage(caught))
     } finally {
@@ -95,12 +106,18 @@ export function WorkflowManagement({ departments, users }: Props) {
     let active = true
     async function loadInitialRules() {
       try {
-        const data = await getWorkflowRules()
+        const [data, availableTypes] = await Promise.all([
+          getWorkflowRules(),
+          getAdminRequestTypes(),
+        ])
         if (!active) return
         setRules(data)
+        setRequestTypes(availableTypes)
         const firstRule = data[0] ?? null
         setSelectedId(firstRule?.id ?? null)
-        setInput(firstRule ? fromRule(firstRule) : blankInput())
+        setInput(firstRule
+          ? fromRule(firstRule)
+          : blankInput(availableTypes.find((type) => type.isEnabled)?.id ?? null))
       } catch (caught) {
         if (active) setError(errorMessage(caught))
       } finally {
@@ -218,7 +235,7 @@ export function WorkflowManagement({ departments, users }: Props) {
           <button className="button button-secondary" onClick={() => void runEscalations()} disabled={saving}>
             Process overdue stages
           </button>
-          <button className="button button-primary" onClick={() => { setSelectedId(null); setInput(blankInput()); setNotice(''); setError('') }}>
+          <button className="button button-primary" onClick={() => { setSelectedId(null); setInput(blankInput(requestTypes.find((type) => type.isEnabled)?.id ?? null)); setNotice(''); setError('') }}>
             <span className="button-plus">+</span> New workflow
           </button>
         </div>
@@ -241,7 +258,7 @@ export function WorkflowManagement({ departments, users }: Props) {
               >
                 <span className={`workflow-status status-${rule.status.toLowerCase()}`}>{rule.status}</span>
                 <strong>{rule.name}</strong>
-                <small>{rule.workflowKey} · v{rule.version}</small>
+                <small>{rule.workflowKey} · v{rule.version} · {rule.requestTypeName ?? 'Legacy generic'}</small>
               </button>
             ))}
         </aside>
@@ -255,12 +272,25 @@ export function WorkflowManagement({ departments, users }: Props) {
           </div>
           <form onSubmit={(event) => { void save(event) }}>
             <div className="workflow-form-grid">
-              <label>Workflow key<input required maxLength={100} value={input.workflowKey} onChange={(event) => updateInput('workflowKey', event.target.value)} disabled={Boolean(selected && !isDraft)} placeholder="e.g. department-expense" /></label>
-              <label>Display name<input required maxLength={150} value={input.name} onChange={(event) => updateInput('name', event.target.value)} disabled={Boolean(selected && !isDraft)} placeholder="Department expense approvals" /></label>
+              <label>Workflow key <span className="required-star" aria-hidden="true"></span><input required maxLength={100} value={input.workflowKey} onChange={(event) => updateInput('workflowKey', event.target.value)} disabled={Boolean(selected && !isDraft)} placeholder="e.g. department-expense" /></label>
+              <label>Display name <span className="required-star" aria-hidden="true"></span><input required maxLength={150} value={input.name} onChange={(event) => updateInput('name', event.target.value)} disabled={Boolean(selected && !isDraft)} placeholder="Department expense approvals" /></label>
+              <label>Request type<select value={input.requestTypeId ?? ''} onChange={(event) => {
+                const requestTypeId = event.target.value ? Number(event.target.value) : null
+                const requestType = requestTypes.find((type) => type.id === requestTypeId)
+                setInput((current) => ({
+                  ...current,
+                  requestTypeId,
+                  ...(!requestType?.requiresAmount
+                    ? { minimumAmount: 0, maximumAmountExclusive: null }
+                    : {}),
+                }))
+              }} disabled={Boolean(selected && !isDraft)}><option value="">Legacy generic requests</option>{requestTypes.map((type) => <option key={type.id} value={type.id} disabled={!type.isEnabled && input.requestTypeId !== type.id}>{type.displayName}{type.isEnabled ? '' : ' · disabled'}</option>)}</select></label>
               <label>Department scope<select value={input.departmentId ?? ''} onChange={(event) => updateInput('departmentId', event.target.value ? Number(event.target.value) : null)} disabled={Boolean(selected && !isDraft)}><option value="">All active departments</option>{departments.filter((department) => department.isActive).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
               <label>Priority scope<select value={input.priority ?? ''} onChange={(event) => updateInput('priority', (event.target.value || null) as WorkflowRuleInput['priority'])} disabled={Boolean(selected && !isDraft)}><option value="">Any priority</option><option>Low</option><option>Medium</option><option>High</option><option>Urgent</option></select></label>
-              <label>Minimum amount<input type="number" min="0" step="0.01" required value={input.minimumAmount} onChange={(event) => updateInput('minimumAmount', Number(event.target.value))} disabled={Boolean(selected && !isDraft)} /></label>
-              <label>Maximum amount (exclusive)<input type="number" min="0.01" step="0.01" value={input.maximumAmountExclusive ?? ''} onChange={(event) => updateInput('maximumAmountExclusive', event.target.value ? Number(event.target.value) : null)} disabled={Boolean(selected && !isDraft)} placeholder="No upper limit" /></label>
+              {(input.requestTypeId == null || requestTypes.find((type) => type.id === input.requestTypeId)?.requiresAmount) && <>
+                <label>Minimum amount <span className="required-star" aria-hidden="true"></span><input type="number" min="0" step="0.01" required value={input.minimumAmount} onChange={(event) => updateInput('minimumAmount', Number(event.target.value))} disabled={Boolean(selected && !isDraft)} /></label>
+                <label>Maximum amount (exclusive)<input type="number" min="0.01" step="0.01" value={input.maximumAmountExclusive ?? ''} onChange={(event) => updateInput('maximumAmountExclusive', event.target.value ? Number(event.target.value) : null)} disabled={Boolean(selected && !isDraft)} placeholder="No upper limit" /></label>
+              </>}
             </div>
             <div className="workflow-stages-heading">
               <div><h3>Sequential approval stages</h3><p>Only one stage is active at a time. Escalation is timed from activation.</p></div>
@@ -276,8 +306,8 @@ export function WorkflowManagement({ departments, users }: Props) {
                       approverDepartmentId: null,
                       specificApproverUserId: null,
                     })} disabled={!isDraft}><option value="RequestDepartmentManager">Request department Manager</option><option value="DepartmentManager">Manager in selected department</option><option value="SpecificManager">Specific Manager</option></select></label>
-                    {stage.approverType === 'DepartmentManager' && <label>Approver department<select required value={stage.approverDepartmentId ?? ''} onChange={(event) => updateStage(index, { approverDepartmentId: event.target.value ? Number(event.target.value) : null })} disabled={!isDraft}><option value="">Select department</option>{departments.filter((department) => department.isActive).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label>}
-                    {stage.approverType === 'SpecificManager' && <label>Manager<select required value={stage.specificApproverUserId ?? ''} onChange={(event) => updateStage(index, { specificApproverUserId: event.target.value ? Number(event.target.value) : null })} disabled={!isDraft}><option value="">Select Manager</option>{managers.map((manager) => <option key={manager.id} value={manager.id}>{manager.fullName} · {departments.find((department) => department.id === manager.departmentId)?.name ?? 'No department'}</option>)}</select></label>}
+                    {stage.approverType === 'DepartmentManager' && <label>Approver department <span className="required-star" aria-hidden="true"></span><select required value={stage.approverDepartmentId ?? ''} onChange={(event) => updateStage(index, { approverDepartmentId: event.target.value ? Number(event.target.value) : null })} disabled={!isDraft}><option value="">Select department</option>{departments.filter((department) => department.isActive).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label>}
+                    {stage.approverType === 'SpecificManager' && <label>Manager <span className="required-star" aria-hidden="true"></span><select required value={stage.specificApproverUserId ?? ''} onChange={(event) => updateStage(index, { specificApproverUserId: event.target.value ? Number(event.target.value) : null })} disabled={!isDraft}><option value="">Select Manager</option>{managers.map((manager) => <option key={manager.id} value={manager.id}>{manager.fullName} · {departments.find((department) => department.id === manager.departmentId)?.name ?? 'No department'}</option>)}</select></label>}
                     <label>Deadline (minutes)<input type="number" min="1" value={stage.deadlineMinutes ?? ''} onChange={(event) => {
                       const deadlineMinutes = event.target.value ? Number(event.target.value) : null
                       updateStage(index, {
@@ -288,7 +318,7 @@ export function WorkflowManagement({ departments, users }: Props) {
                       })
                     }} disabled={!isDraft} placeholder="No deadline" /></label>
                     <label>Escalate after (minutes)<input type="number" min={stage.deadlineMinutes ?? 1} value={stage.escalationAfterMinutes ?? ''} onChange={(event) => updateStage(index, { escalationAfterMinutes: event.target.value ? Number(event.target.value) : null })} disabled={!isDraft} placeholder="Disabled" /></label>
-                    {stage.escalationAfterMinutes != null && <label>Escalation recipient<select required value={stage.escalationApproverUserId ?? ''} onChange={(event) => updateStage(index, { escalationApproverUserId: event.target.value ? Number(event.target.value) : null })} disabled={!isDraft}><option value="">Select Manager</option>{managers.map((manager) => <option key={manager.id} value={manager.id}>{manager.fullName}</option>)}</select></label>}
+                    {stage.escalationAfterMinutes != null && <label>Escalation recipient <span className="required-star" aria-hidden="true"></span><select required value={stage.escalationApproverUserId ?? ''} onChange={(event) => updateStage(index, { escalationApproverUserId: event.target.value ? Number(event.target.value) : null })} disabled={!isDraft}><option value="">Select Manager</option>{managers.map((manager) => <option key={manager.id} value={manager.id}>{manager.fullName}</option>)}</select></label>}
                   </div>
                   {isDraft && input.stages.length > 1 && <button type="button" className="workflow-remove-stage" aria-label={`Remove stage ${index + 1}`} onClick={() => updateInput('stages', input.stages.filter((_, stageIndex) => stageIndex !== index).map((item, stageIndex) => ({ ...item, sequence: stageIndex + 1 })))}>×</button>}
                 </article>

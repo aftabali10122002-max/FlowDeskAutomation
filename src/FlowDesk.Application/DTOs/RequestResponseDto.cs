@@ -7,8 +7,14 @@ public class RequestResponseDto
 
     public string Title { get; set; } = string.Empty;
 
-    public decimal Amount { get; set; }
+    public string? Description { get; set; }
 
+    public decimal? Amount { get; set; }
+
+    public int? RequestTypeId { get; set; }
+    public string? RequestTypeCode { get; set; }
+    public string? RequestTypeName { get; set; }
+    public object? RequestDetails { get; set; }
     public RequestPriority? Priority { get; set; }
 
     public string Status { get; set; } = string.Empty;

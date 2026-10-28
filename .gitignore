@@ -45,13 +45,15 @@ Thumbs.db
 *.secret
 
 # Local configuration and secrets
-**/appsettings.Development.json
-**/appsettings.Local.json
-*.local-backup
-*.bak
-*.mdf
-*.ldf
 
 # User-specific IDE files
 .vscode/
 .idea/
+
+# Local uploaded profile images and runtime data
+src/FlowDisk.Api/App_Data/
+
+# .NET build outputs in all projects and tools
+
+# Local migration troubleshooting artifacts
+artifacts/

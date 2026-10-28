@@ -15,7 +15,52 @@ public class AppDbContext : DbContext
     public DbSet<ApprovalRequest> ApprovalRequests =>
         Set<ApprovalRequest>();
 
+    public DbSet<RequestAttachment> RequestAttachments =>
+        Set<RequestAttachment>();
+
     public DbSet<Department> Departments => Set<Department>();
+
+    public DbSet<RequestType> RequestTypes => Set<RequestType>();
+
+    public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
+
+    public DbSet<LeavePolicy> LeavePolicies => Set<LeavePolicy>();
+
+    public DbSet<LeavePolicyEntitlement> LeavePolicyEntitlements =>
+        Set<LeavePolicyEntitlement>();
+
+    public DbSet<LeavePolicyAssignment> LeavePolicyAssignments =>
+        Set<LeavePolicyAssignment>();
+
+    public DbSet<Designation> Designations => Set<Designation>();
+
+    public DbSet<EmployeeEmploymentProfile> EmployeeEmploymentProfiles =>
+        Set<EmployeeEmploymentProfile>();
+
+    public DbSet<LeaveWorkSchedule> LeaveWorkSchedules =>
+        Set<LeaveWorkSchedule>();
+
+    public DbSet<LeaveWorkScheduleDay> LeaveWorkScheduleDays =>
+        Set<LeaveWorkScheduleDay>();
+
+    public DbSet<LeaveHolidayCalendar> LeaveHolidayCalendars =>
+        Set<LeaveHolidayCalendar>();
+
+    public DbSet<LeaveHoliday> LeaveHolidays => Set<LeaveHoliday>();
+
+    public DbSet<LeavePayrollCalendar> LeavePayrollCalendars =>
+        Set<LeavePayrollCalendar>();
+
+    public DbSet<LeavePayPeriod> LeavePayPeriods => Set<LeavePayPeriod>();
+
+    public DbSet<LeaveBalanceLedgerEntry> LeaveBalanceLedgerEntries =>
+        Set<LeaveBalanceLedgerEntry>();
+
+    public DbSet<LeaveBalanceAllocation> LeaveBalanceAllocations =>
+        Set<LeaveBalanceAllocation>();
+
+    public DbSet<LeaveRequestPolicyDay> LeaveRequestPolicyDays =>
+        Set<LeaveRequestPolicyDay>();
 
     public DbSet<ApprovalAssignment> ApprovalAssignments =>
         Set<ApprovalAssignment>();
@@ -31,6 +76,8 @@ public class AppDbContext : DbContext
 
     public DbSet<ApprovalDecisionHistory> ApprovalDecisionHistory =>
         Set<ApprovalDecisionHistory>();
+
+    public DbSet<AuditLogEntry> AuditLogEntries => Set<AuditLogEntry>();
 
     public DbSet<ApprovalWorkflowEscalation> ApprovalWorkflowEscalations =>
         Set<ApprovalWorkflowEscalation>();
@@ -60,9 +107,11 @@ public class AppDbContext : DbContext
                 .HasMaxLength(200)
                 .IsRequired();
 
+            entity.Property(x => x.Description)
+                .HasMaxLength(2000);
+
             entity.Property(x => x.Amount)
-                .HasColumnType("decimal(18,2)")
-                .IsRequired();
+                .HasColumnType("decimal(18,2)");
 
             entity.Property(x => x.Priority)
                 .HasConversion<int?>();
@@ -83,6 +132,7 @@ public class AppDbContext : DbContext
                 x.CreatedAtUtc
             });
             entity.HasIndex(x => new { x.Status, x.CreatedAtUtc });
+            entity.HasIndex(x => x.RequestTypeId);
 
             entity.HasOne(x => x.CreatedByUser)
                 .WithMany(x => x.CreatedRequests)
@@ -92,6 +142,39 @@ public class AppDbContext : DbContext
             entity.HasOne(x => x.Department)
                 .WithMany(x => x.ApprovalRequests)
                 .HasForeignKey(x => x.DepartmentId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(x => x.RequestType)
+                .WithMany()
+                .HasForeignKey(x => x.RequestTypeId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(x => x.MaterialPurchaseDetails)
+                .WithOne(x => x.Request)
+                .HasForeignKey<MaterialPurchaseRequestDetails>(
+                    x => x.RequestId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.LeaveDetails)
+                .WithOne(x => x.Request)
+                .HasForeignKey<LeaveRequestDetails>(x => x.RequestId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.ExpenseReimbursementDetails)
+                .WithOne(x => x.Request)
+                .HasForeignKey<ExpenseReimbursementRequestDetails>(
+                    x => x.RequestId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.ItAccessDetails)
+                .WithOne(x => x.Request)
+                .HasForeignKey<ItAccessRequestDetails>(x => x.RequestId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.TravelDetails)
+                .WithOne(x => x.Request)
+                .HasForeignKey<TravelRequestDetails>(x => x.RequestId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.WorkFromHomeDetails)
+                .WithOne(x => x.Request)
+                .HasForeignKey<WorkFromHomeRequestDetails>(
+                    x => x.RequestId)
                 .OnDelete(DeleteBehavior.NoAction);
 
             entity.HasOne(x => x.WorkflowInstance)
@@ -122,6 +205,12 @@ public class AppDbContext : DbContext
             entity.Property(x => x.PasswordHash)
                 .HasMaxLength(500)
                 .IsRequired();
+
+            entity.Property(x => x.PhoneNumber)
+                .HasMaxLength(32);
+
+            entity.Property(x => x.ProfileImageStorageKey)
+                .HasMaxLength(128);
 
             entity.Property(x => x.Role)
                 .HasMaxLength(30)
@@ -168,6 +257,186 @@ public class AppDbContext : DbContext
             entity.Property(x => x.CreatedAtUtc)
                 .HasColumnType("datetime2")
                 .IsRequired();
+        });
+
+        modelBuilder.Entity<RequestType>(entity =>
+        {
+            entity.ToTable("RequestTypes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Code).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.DisplayName).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.RequiresAmount).IsRequired();
+            entity.Property(x => x.IsEnabled).IsRequired();
+            entity.HasIndex(x => x.Code).IsUnique();
+            entity.HasData(
+                new
+                {
+                    Id = 1,
+                    Code = RequestTypeCodes.MaterialPurchase,
+                    DisplayName = "Material Purchase",
+                    RequiresAmount = true,
+                    IsEnabled = true
+                },
+                new
+                {
+                    Id = 2,
+                    Code = RequestTypeCodes.Leave,
+                    DisplayName = "Leave Request",
+                    RequiresAmount = false,
+                    IsEnabled = true
+                },
+                new
+                {
+                    Id = 3,
+                    Code = RequestTypeCodes.ExpenseReimbursement,
+                    DisplayName = "Expense Reimbursement",
+                    RequiresAmount = true,
+                    IsEnabled = true
+                },
+                new
+                {
+                    Id = 4,
+                    Code = RequestTypeCodes.ItAccess,
+                    DisplayName = "IT Access",
+                    RequiresAmount = false,
+                    IsEnabled = true
+                },
+                new
+                {
+                    Id = 5,
+                    Code = RequestTypeCodes.Travel,
+                    DisplayName = "Travel Request",
+                    RequiresAmount = true,
+                    IsEnabled = true
+                },
+                new
+                {
+                    Id = 6,
+                    Code = RequestTypeCodes.WorkFromHome,
+                    DisplayName = "Work From Home",
+                    RequiresAmount = false,
+                    IsEnabled = true
+                });
+        });
+
+        modelBuilder.Entity<MaterialPurchaseRequestDetails>(entity =>
+        {
+            entity.ToTable("MaterialPurchaseRequestDetails", table =>
+                table.HasCheckConstraint(
+                    "CK_MaterialPurchaseRequestDetails_Quantity",
+                    "[Quantity] > 0"));
+            entity.HasKey(x => x.RequestId);
+            entity.Property(x => x.ItemName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Quantity).IsRequired();
+            entity.Property(x => x.BusinessJustification)
+                .HasMaxLength(2000)
+                .IsRequired();
+        });
+
+        modelBuilder.Entity<LeaveRequestDetails>(entity =>
+        {
+            entity.ToTable("LeaveRequestDetails", table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_LeaveRequestDetails_DateRange",
+                    "[EndDate] >= [StartDate]");
+                table.HasCheckConstraint(
+                    "CK_LeaveRequestDetails_TotalLeaveDays",
+                    "[TotalLeaveDays] > 0");
+                table.HasCheckConstraint(
+                    "CK_LeaveRequestDetails_DayPortions",
+                    "[StartDayPortion] IN (1, 2) AND " +
+                    "[EndDayPortion] IN (1, 2)");
+                table.HasCheckConstraint(
+                    "CK_LeaveRequestDetails_CalculatedLeaveUnits",
+                    "[CalculatedLeaveUnits] IS NULL OR " +
+                    "[CalculatedLeaveUnits] > 0");
+                table.HasCheckConstraint(
+                    "CK_LeaveRequestDetails_CancellationOfRequest",
+                    "[CancellationOfRequestId] IS NULL OR " +
+                    "[CancellationOfRequestId] > 0");
+            });
+            entity.HasKey(x => x.RequestId);
+            entity.Property(x => x.LeaveType).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.StartDate).HasColumnType("date");
+            entity.Property(x => x.EndDate).HasColumnType("date");
+            entity.Property(x => x.Reason).HasMaxLength(2000).IsRequired();
+            entity.Property(x => x.TotalLeaveDays).IsRequired();
+            entity.Property(x => x.StartDayPortion)
+                .HasConversion<int>()
+                .HasDefaultValue(FlowDesk.Domain.Enums.LeaveDayPortion.FullDay);
+            entity.Property(x => x.EndDayPortion)
+                .HasConversion<int>()
+                .HasDefaultValue(FlowDesk.Domain.Enums.LeaveDayPortion.FullDay);
+            entity.Property(x => x.CalculatedLeaveUnits)
+                .HasColumnType("decimal(18,2)");
+            entity.HasOne<LeaveType>()
+                .WithMany()
+                .HasForeignKey(x => x.ConfiguredLeaveTypeId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasIndex(x => x.CancellationOfRequestId)
+                .IsUnique()
+                .HasFilter("[CancellationOfRequestId] IS NOT NULL");
+            entity.HasOne<ApprovalRequest>()
+                .WithMany()
+                .HasForeignKey(x => x.CancellationOfRequestId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<ExpenseReimbursementRequestDetails>(entity =>
+        {
+            entity.ToTable("ExpenseReimbursementRequestDetails");
+            entity.HasKey(x => x.RequestId);
+            entity.Property(x => x.Category).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ExpenseDate).HasColumnType("date");
+            entity.Property(x => x.BusinessJustification)
+                .HasMaxLength(2000)
+                .IsRequired();
+        });
+
+        modelBuilder.Entity<ItAccessRequestDetails>(entity =>
+        {
+            entity.ToTable("ItAccessRequestDetails", table =>
+                table.HasCheckConstraint(
+                    "CK_ItAccessRequestDetails_DurationDays",
+                    "[DurationDays] IS NULL OR [DurationDays] > 0"));
+            entity.HasKey(x => x.RequestId);
+            entity.Property(x => x.SystemApplication)
+                .HasMaxLength(150)
+                .IsRequired();
+            entity.Property(x => x.RequestedAccessLevel)
+                .HasMaxLength(100)
+                .IsRequired();
+            entity.Property(x => x.BusinessJustification)
+                .HasMaxLength(2000)
+                .IsRequired();
+        });
+
+        modelBuilder.Entity<TravelRequestDetails>(entity =>
+        {
+            entity.ToTable("TravelRequestDetails", table =>
+                table.HasCheckConstraint(
+                    "CK_TravelRequestDetails_DateRange",
+                    "[EndDate] >= [StartDate]"));
+            entity.HasKey(x => x.RequestId);
+            entity.Property(x => x.Destination).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.StartDate).HasColumnType("date");
+            entity.Property(x => x.EndDate).HasColumnType("date");
+            entity.Property(x => x.BusinessPurpose)
+                .HasMaxLength(2000)
+                .IsRequired();
+        });
+
+        modelBuilder.Entity<WorkFromHomeRequestDetails>(entity =>
+        {
+            entity.ToTable("WorkFromHomeRequestDetails", table =>
+                table.HasCheckConstraint(
+                    "CK_WorkFromHomeRequestDetails_DateRange",
+                    "[EndDate] >= [StartDate]"));
+            entity.HasKey(x => x.RequestId);
+            entity.Property(x => x.StartDate).HasColumnType("date");
+            entity.Property(x => x.EndDate).HasColumnType("date");
+            entity.Property(x => x.Reason).HasMaxLength(2000).IsRequired();
         });
 
         modelBuilder.Entity<ApprovalAssignment>(entity =>
@@ -256,6 +525,7 @@ public class AppDbContext : DbContext
             entity.Property(x => x.CreatedAtUtc).HasColumnType("datetime2");
             entity.Property(x => x.PublishedAtUtc).HasColumnType("datetime2");
             entity.HasIndex(x => new { x.WorkflowKey, x.Version }).IsUnique();
+            entity.HasIndex(x => x.RequestTypeId);
             entity.HasIndex(x => new
             {
                 x.Status,
@@ -267,6 +537,10 @@ public class AppDbContext : DbContext
             entity.HasOne(x => x.Department)
                 .WithMany()
                 .HasForeignKey(x => x.DepartmentId)
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.RequestType)
+                .WithMany()
+                .HasForeignKey(x => x.RequestTypeId)
                 .OnDelete(DeleteBehavior.NoAction);
             entity.HasMany(x => x.Stages)
                 .WithOne(x => x.WorkflowRule)
@@ -386,6 +660,25 @@ public class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.NoAction);
         });
 
+        modelBuilder.Entity<AuditLogEntry>(entity =>
+        {
+            entity.ToTable("AuditLogEntries");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Action).HasMaxLength(60).IsRequired();
+            entity.Property(x => x.EntityType).HasMaxLength(60).IsRequired();
+            entity.Property(x => x.OccurredAtUtc)
+                .HasColumnType("datetime2")
+                .IsRequired();
+            entity.Property(x => x.Details).HasMaxLength(500);
+            entity.HasIndex(x => x.OccurredAtUtc);
+            entity.HasIndex(x => new { x.Action, x.OccurredAtUtc });
+            entity.HasIndex(x => new { x.EntityType, x.EntityId });
+            entity.HasOne<User>()
+                .WithMany()
+                .HasForeignKey(x => x.ActorUserId)
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
         modelBuilder.Entity<ApprovalWorkflowEscalation>(entity =>
         {
             entity.ToTable("ApprovalWorkflowEscalations");
@@ -466,5 +759,8 @@ public class AppDbContext : DbContext
                 .HasForeignKey(x => x.NotificationId)
                 .OnDelete(DeleteBehavior.NoAction);
         });
+
+        modelBuilder.ApplyConfigurationsFromAssembly(
+            typeof(AppDbContext).Assembly);
     }
 }

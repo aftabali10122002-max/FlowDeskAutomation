@@ -14,7 +14,8 @@ public enum WorkflowDecisionResult
     Success,
     NotWorkflowRequest,
     NotAssigned,
-    Conflict
+    Conflict,
+    AttachmentsNotClean
 }
 
 public sealed record WorkflowEscalationRequest(

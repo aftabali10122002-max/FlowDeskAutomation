@@ -8,9 +8,12 @@ public interface IUserRepository
 
     Task<User?> GetByIdAsync(int id);
 
+    Task<User?> GetProfileByIdAsync(int id);
+
     Task<User?> GetTrackedByIdAsync(int id);
 
     Task<List<User>> GetAllAsync();
+    Task<List<User>> GetActiveByDepartmentAsync(int departmentId);
 
     Task<int> CountByRoleAsync(string role);
 

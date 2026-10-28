@@ -9,7 +9,9 @@ public sealed class ApprovalWorkflowService(
     IApprovalWorkflowRepository workflowRepository,
     IApprovalRequestRepository requestRepository,
     IUserRepository userRepository,
-    IDepartmentRepository departmentRepository)
+    IDepartmentRepository departmentRepository,
+    IRequestTypeRepository requestTypeRepository,
+    ILeaveRequestPreparationService? leaveRequestPreparationService = null)
 {
     public async Task<List<ApprovalWorkflowRule>> GetRulesAsync(int adminUserId)
     {
@@ -38,10 +40,10 @@ public sealed class ApprovalWorkflowService(
             input.MinimumAmount,
             input.MaximumAmountExclusive,
             input.Priority,
-            BuildStages(input.Stages));
+            BuildStages(input.Stages),
+            input.RequestTypeId);
         await ValidateRuleReferencesAsync(rule);
-        await workflowRepository.AddRuleAsync(rule);
-        await workflowRepository.SaveChangesAsync();
+        await workflowRepository.AddRuleAsync(rule, adminUserId);
         return rule;
     }
 
@@ -65,9 +67,10 @@ public sealed class ApprovalWorkflowService(
             input.MinimumAmount,
             input.MaximumAmountExclusive,
             input.Priority,
-            stages);
+            stages,
+            input.RequestTypeId);
         await ValidateRuleReferencesAsync(rule);
-        await workflowRepository.SaveChangesAsync();
+        await workflowRepository.SaveRuleUpdateAsync(rule, adminUserId);
         return rule;
     }
 
@@ -93,9 +96,9 @@ public sealed class ApprovalWorkflowService(
             source.MinimumAmount,
             source.MaximumAmountExclusive,
             source.Priority,
-            source.Stages.Select(CloneStage));
-        await workflowRepository.AddRuleAsync(rule);
-        await workflowRepository.SaveChangesAsync();
+            source.Stages.Select(CloneStage),
+            source.RequestTypeId);
+        await workflowRepository.AddRuleAsync(rule, adminUserId);
         return rule;
     }
 
@@ -109,19 +112,33 @@ public sealed class ApprovalWorkflowService(
         }
 
         await ValidateRuleReferencesAsync(rule);
-        await workflowRepository.ActivateRuleAsync(ruleId, ConflictsWith);
+        await workflowRepository.ActivateRuleAsync(
+            adminUserId,
+            ruleId,
+            ConflictsWith);
     }
 
     public async Task DeactivateRuleAsync(int adminUserId, int ruleId)
     {
         await RequireRoleAsync(adminUserId, UserRoles.Admin);
-        await workflowRepository.DeactivateRuleAsync(ruleId);
+        await workflowRepository.DeactivateRuleAsync(adminUserId, ruleId);
     }
 
     public async Task<ApprovalRequest> CreateRequestAsync(
         ApprovalRequest request,
         RequestPriority priority)
     {
+        if (request.LeaveDetails is { CancellationOfRequestId: null })
+        {
+            if (leaveRequestPreparationService is null)
+            {
+                throw new InvalidOperationException(
+                    "Leave request policy validation is not configured.");
+            }
+
+            await leaveRequestPreparationService.PrepareAsync(request);
+        }
+
         var activeRules = await workflowRepository.GetActiveRulesAsync();
         var matches = activeRules
             .Where(rule => Matches(rule, request, priority))
@@ -130,8 +147,7 @@ public sealed class ApprovalWorkflowService(
         request.SetPriority(priority);
         if (matches.Count == 0)
         {
-            await requestRepository.AddAsync(request);
-            await requestRepository.SaveChangesAsync();
+            return await workflowRepository.CreateUnroutedRequestAsync(request);
         }
         else if (matches.Count > 1)
         {
@@ -147,17 +163,6 @@ public sealed class ApprovalWorkflowService(
                 request,
                 rule.Id,
                 stageResolutions);
-        }
-
-        if (request.CreatedByUserId is int ownerId)
-        {
-            await workflowRepository.CreateNotificationAsync(
-                ownerId,
-                request.Id,
-                WorkflowNotificationType.RequestSubmitted,
-                $"Your request REQ-{request.Id:D4} was submitted.",
-                $"request-submitted:{request.Id}",
-                DateTime.UtcNow);
         }
 
         return request;
@@ -245,6 +250,40 @@ public sealed class ApprovalWorkflowService(
             : null;
     }
 
+    public async Task<ApprovalActionResult> DecideLegacyAssignmentAsync(
+        int requestId,
+        int managerUserId,
+        bool approve)
+    {
+        await RequireRoleAsync(managerUserId, UserRoles.Manager);
+        return await workflowRepository.DecideLegacyAssignmentAsync(
+            requestId,
+            managerUserId,
+            approve);
+    }
+
+    public async Task<RequestCancellationResult> CancelUnroutedRequestAsync(
+        int requestId,
+        int ownerUserId)
+    {
+        await RequireRoleAsync(ownerUserId, UserRoles.Employee);
+        return await workflowRepository.CancelUnroutedRequestAsync(
+            requestId,
+            ownerUserId);
+    }
+
+    public async Task<AssignmentCreationResult> CreateManualAssignmentAsync(
+        int requestId,
+        int approverUserId,
+        int adminUserId)
+    {
+        await RequireRoleAsync(adminUserId, UserRoles.Admin);
+        return await workflowRepository.CreateManualAssignmentAsync(
+            requestId,
+            approverUserId,
+            adminUserId);
+    }
+
     public async Task<int> ProcessEscalationsAsync(int adminUserId)
     {
         await RequireRoleAsync(adminUserId, UserRoles.Admin);
@@ -325,6 +364,25 @@ public sealed class ApprovalWorkflowService(
 
     private async Task ValidateRuleReferencesAsync(ApprovalWorkflowRule rule)
     {
+        if (rule.RequestTypeId is int requestTypeId)
+        {
+            var requestType = (await requestTypeRepository.GetAllAsync())
+                .FirstOrDefault(x => x.Id == requestTypeId);
+            if (requestType is not { IsEnabled: true })
+            {
+                throw new ArgumentException(
+                    "Workflow request type must exist and be enabled.");
+            }
+
+            if (!requestType.RequiresAmount &&
+                (rule.MinimumAmount != 0 ||
+                 rule.MaximumAmountExclusive.HasValue))
+            {
+                throw new ArgumentException(
+                    "Amount thresholds are not supported for this request type.");
+            }
+        }
+
         var departments = await departmentRepository.GetAllAsync();
         var activeDepartments = departments.Where(x => x.IsActive).ToList();
         if (rule.DepartmentId.HasValue &&
@@ -410,10 +468,15 @@ public sealed class ApprovalWorkflowService(
 
             if (stage.EscalationApproverUserId.HasValue)
             {
-                RequireManager(
-                    managers,
-                    stage.EscalationApproverUserId,
-                    "Escalation recipient must be an active Manager.");
+                var escalationRecipient = users.FirstOrDefault(x =>
+                    x.Id == stage.EscalationApproverUserId.Value &&
+                    x.IsActive &&
+                    (x.Role == UserRoles.Manager || x.Role == UserRoles.Admin));
+                if (escalationRecipient == null)
+                {
+                    throw new ArgumentException(
+                        "Escalation recipient must be an active Manager or Admin.");
+                }
             }
         }
     }
@@ -542,12 +605,18 @@ public sealed class ApprovalWorkflowService(
         ApprovalRequest request,
         RequestPriority priority)
     {
+        var amountMatches = request.Amount is decimal amount
+            ? rule.MinimumAmount <= amount &&
+              (!rule.MaximumAmountExclusive.HasValue ||
+               amount < rule.MaximumAmountExclusive.Value)
+            : rule.MinimumAmount == 0 &&
+              !rule.MaximumAmountExclusive.HasValue;
+
         return rule.Status == ApprovalWorkflowRuleStatus.Active &&
+            rule.RequestTypeId == request.RequestTypeId &&
             (!rule.DepartmentId.HasValue ||
              rule.DepartmentId == request.DepartmentId) &&
-            rule.MinimumAmount <= request.Amount &&
-            (!rule.MaximumAmountExclusive.HasValue ||
-             request.Amount < rule.MaximumAmountExclusive.Value) &&
+            amountMatches &&
             (!rule.Priority.HasValue || rule.Priority == priority);
     }
 
@@ -557,6 +626,7 @@ public sealed class ApprovalWorkflowService(
     {
         return activeRules.Any(existing =>
             existing.Id != candidate.Id &&
+            existing.RequestTypeId == candidate.RequestTypeId &&
             DepartmentsOverlap(existing.DepartmentId, candidate.DepartmentId) &&
             PrioritiesOverlap(existing.Priority, candidate.Priority) &&
             AmountsOverlap(existing, candidate));

@@ -28,6 +28,14 @@ public class UserRepository : IUserRepository
             .FirstOrDefaultAsync(x => x.Id == id);
     }
 
+    public Task<User?> GetProfileByIdAsync(int id)
+    {
+        return _context.Users
+            .AsNoTracking()
+            .Include(x => x.Department)
+            .FirstOrDefaultAsync(x => x.Id == id);
+    }
+
     public async Task<User?> GetTrackedByIdAsync(int id)
     {
         return await _context.Users
@@ -39,6 +47,15 @@ public class UserRepository : IUserRepository
         return _context.Users
             .AsNoTracking()
             .OrderBy(x => x.Id)
+            .ToListAsync();
+    }
+
+    public Task<List<User>> GetActiveByDepartmentAsync(int departmentId)
+    {
+        return _context.Users
+            .AsNoTracking()
+            .Where(x => x.IsActive && x.DepartmentId == departmentId)
+            .OrderBy(x => x.FullName)
             .ToListAsync();
     }
 

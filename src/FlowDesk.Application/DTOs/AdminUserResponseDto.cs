@@ -15,4 +15,8 @@ public class AdminUserResponseDto
     public int? DepartmentId { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }
+
+    public bool HasProfileImage { get; set; }
+
+    public string? ProfileImageUrl { get; set; }
 }

@@ -18,8 +18,7 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
 
     public Task<List<ApprovalRequest>> GetForEmployeeAsync(int userId)
     {
-        return _context.ApprovalRequests
-            .AsNoTracking()
+        return IncludeRequestDetails(_context.ApprovalRequests.AsNoTracking())
             .Include(x => x.CreatedByUser)
             .Include(x => x.Department)
             .Include(x => x.Assignments)
@@ -31,8 +30,7 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
 
     public Task<List<ApprovalRequest>> GetAssignedToManagerAsync(int userId)
     {
-        return _context.ApprovalRequests
-            .AsNoTracking()
+        return IncludeRequestDetails(_context.ApprovalRequests.AsNoTracking())
             .Include(x => x.CreatedByUser)
             .Include(x => x.Department)
             .Include(x => x.Assignments
@@ -47,8 +45,7 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
 
     public Task<List<ApprovalRequest>> GetAllOwnedAsync()
     {
-        return _context.ApprovalRequests
-            .AsNoTracking()
+        return IncludeRequestDetails(_context.ApprovalRequests.AsNoTracking())
             .Include(x => x.CreatedByUser)
             .Include(x => x.Department)
             .Include(x => x.Assignments)
@@ -60,8 +57,7 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
 
     public Task<List<ApprovalRequest>> GetLegacyAsync()
     {
-        return _context.ApprovalRequests
-            .AsNoTracking()
+        return IncludeRequestDetails(_context.ApprovalRequests.AsNoTracking())
             .Where(x => x.CreatedByUserId == null)
             .OrderByDescending(x => x.CreatedAtUtc)
             .ToListAsync();
@@ -69,8 +65,7 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
 
     public Task<ApprovalRequest?> GetOwnedByIdAsync(int id, int userId)
     {
-        return _context.ApprovalRequests
-            .AsNoTracking()
+        return IncludeRequestDetails(_context.ApprovalRequests.AsNoTracking())
             .Include(x => x.CreatedByUser)
             .Include(x => x.Department)
             .Include(x => x.Assignments)
@@ -80,12 +75,24 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
                 x.CreatedByUserId == userId);
     }
 
+    public Task<bool> HasLeaveCancellationRequestAsync(int originalRequestId)
+    {
+        return _context.Set<LeaveRequestDetails>().AnyAsync(x =>
+            x.CancellationOfRequestId == originalRequestId);
+    }
+
+    public Task<bool> HasScheduledLeaveCommitmentAsync(int originalRequestId)
+    {
+        return _context.LeaveBalanceLedgerEntries.AnyAsync(x =>
+            x.RequestId == originalRequestId &&
+            x.EntryType == LeaveLedgerEntryType.ScheduledCommitment);
+    }
+
     public Task<ApprovalRequest?> GetAssignedToManagerByIdAsync(
         int id,
         int userId)
     {
-        return _context.ApprovalRequests
-            .AsNoTracking()
+        return IncludeRequestDetails(_context.ApprovalRequests.AsNoTracking())
             .Include(x => x.CreatedByUser)
             .Include(x => x.Department)
             .Include(x => x.Assignments
@@ -123,6 +130,19 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
     {
         return _context.ApprovalRequests
             .FirstOrDefaultAsync(x => x.Id == id);
+    }
+
+    private static IQueryable<ApprovalRequest> IncludeRequestDetails(
+        IQueryable<ApprovalRequest> query)
+    {
+        return query
+            .Include(x => x.RequestType)
+            .Include(x => x.MaterialPurchaseDetails)
+            .Include(x => x.LeaveDetails)
+            .Include(x => x.ExpenseReimbursementDetails)
+            .Include(x => x.ItAccessDetails)
+            .Include(x => x.TravelDetails)
+            .Include(x => x.WorkFromHomeDetails);
     }
 
     public async Task AddAsync(ApprovalRequest request)
@@ -173,8 +193,8 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
         int approverUserId,
         bool approve)
     {
-        await using var transaction =
-            await _context.Database.BeginTransactionAsync();
+        await using var transaction = await _context.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable);
 
         var decidedAtUtc = DateTime.UtcNow;
         var assignmentStatus = approve
@@ -188,12 +208,9 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
             .Where(x =>
                 x.Id == requestId &&
                 x.CreatedByUserId != null &&
-                x.Status == RequestStatus.Pending &&
-                x.Assignments.Any(a =>
-                    a.ApproverUserId == approverUserId &&
-                    a.Status == ApprovalAssignmentStatus.Pending))
+                x.Status == RequestStatus.Pending)
             .ExecuteUpdateAsync(setters => setters
-                .SetProperty(x => x.Status, requestStatus));
+                .SetProperty(x => x.Status, RequestStatus.Pending));
 
         if (requestRows == 0)
         {
@@ -205,6 +222,28 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
             return hasAssignment
                 ? ApprovalActionResult.Conflict
                 : ApprovalActionResult.NotAssigned;
+        }
+
+        var hasPendingAssignment = await _context.ApprovalAssignments
+            .AnyAsync(x =>
+                x.RequestId == requestId &&
+                x.ApproverUserId == approverUserId &&
+                x.Status == ApprovalAssignmentStatus.Pending);
+        if (!hasPendingAssignment)
+        {
+            return await _context.ApprovalAssignments.AnyAsync(x =>
+                    x.RequestId == requestId &&
+                    x.ApproverUserId == approverUserId)
+                ? ApprovalActionResult.Conflict
+                : ApprovalActionResult.NotAssigned;
+        }
+
+        if (approve && await _context.RequestAttachments.AnyAsync(x =>
+                x.RequestId == requestId &&
+                x.DeletedAtUtc == null &&
+                x.ScanStatus != AttachmentScanStatus.Clean))
+        {
+            return ApprovalActionResult.AttachmentsNotClean;
         }
 
         var assignmentRows = await _context.ApprovalAssignments
@@ -222,6 +261,13 @@ public class ApprovalRequestRepository : IApprovalRequestRepository
             return ApprovalActionResult.Conflict;
         }
 
+        _context.AuditLogEntries.Add(new AuditLogEntry(
+            approverUserId,
+            approve ? "request.approved" : "request.rejected",
+            "ApprovalRequest",
+            requestId,
+            decidedAtUtc));
+        await _context.SaveChangesAsync();
         await transaction.CommitAsync();
         return ApprovalActionResult.Success;
     }

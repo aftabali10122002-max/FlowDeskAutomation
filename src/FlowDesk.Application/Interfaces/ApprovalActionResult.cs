@@ -4,5 +4,6 @@ public enum ApprovalActionResult
 {
     Success,
     NotAssigned,
-    Conflict
+    Conflict,
+    AttachmentsNotClean
 }

@@ -10,6 +10,10 @@ public class User
 
     public string PasswordHash { get; private set; } = string.Empty;
 
+    public string? PhoneNumber { get; private set; }
+
+    public string? ProfileImageStorageKey { get; private set; }
+
     public string Role { get; private set; } = UserRoles.Employee;
 
     public int? DepartmentId { get; private set; }
@@ -55,6 +59,54 @@ public class User
     public void ChangeRole(string role)
     {
         Role = UserRoles.Normalize(role);
+    }
+
+    public void ChangePasswordHash(string passwordHash)
+    {
+        if (string.IsNullOrWhiteSpace(passwordHash))
+        {
+            throw new ArgumentException(
+                "Password hash is required.",
+                nameof(passwordHash));
+        }
+
+        PasswordHash = passwordHash;
+    }
+
+    public void UpdateProfile(string fullName, string? phoneNumber)
+    {
+        if (string.IsNullOrWhiteSpace(fullName) || fullName.Trim().Length > 100)
+        {
+            throw new ArgumentException(
+                "Full name is required and cannot exceed 100 characters.",
+                nameof(fullName));
+        }
+
+        var normalizedPhoneNumber = string.IsNullOrWhiteSpace(phoneNumber)
+            ? null
+            : phoneNumber.Trim();
+        if (normalizedPhoneNumber?.Length > 32)
+        {
+            throw new ArgumentException(
+                "Phone number cannot exceed 32 characters.",
+                nameof(phoneNumber));
+        }
+
+        FullName = fullName.Trim();
+        PhoneNumber = normalizedPhoneNumber;
+    }
+
+    public void SetProfileImageStorageKey(string? storageKey)
+    {
+        if (storageKey is not null &&
+            !Guid.TryParseExact(storageKey, "N", out _))
+        {
+            throw new ArgumentException(
+                "Profile image storage key is invalid.",
+                nameof(storageKey));
+        }
+
+        ProfileImageStorageKey = storageKey;
     }
 
     public void ChangeDepartment(int? departmentId)

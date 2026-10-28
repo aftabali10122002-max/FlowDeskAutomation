@@ -129,6 +129,72 @@ public class RequestAuthorizationTests
     }
 
     [Fact]
+    public async Task RequestCreation_PersistsAndReturnsOptionalDescription()
+    {
+        using var factory = new ApiFactory();
+        await factory.InitializeDatabaseAsync();
+        var employee = await factory.AddUserAsync();
+        using var client = factory.CreateAuthorizedClient(
+            employee.Id,
+            "Employee");
+
+        using var created = await client.PostAsJsonAsync(
+            "/api/requests",
+            new
+            {
+                title = "Request with description",
+                description = "  Purchase needed for the new team.  ",
+                amount = 125m
+            });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = JsonDocument.Parse(
+            await created.Content.ReadAsStringAsync());
+        var requestId = createdDocument.RootElement
+            .GetProperty("id")
+            .GetInt32();
+        Assert.Equal(
+            "Purchase needed for the new team.",
+            createdDocument.RootElement.GetProperty("description").GetString());
+
+        using var details = await client.GetAsync($"/api/requests/{requestId}");
+        Assert.Equal(HttpStatusCode.OK, details.StatusCode);
+        using var detailsDocument = JsonDocument.Parse(
+            await details.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "Purchase needed for the new team.",
+            detailsDocument.RootElement.GetProperty("description").GetString());
+
+        var listedRequests = await client.GetFromJsonAsync<JsonElement[]>(
+            "/api/requests");
+        Assert.Equal(
+            "Purchase needed for the new team.",
+            listedRequests!.Single(item =>
+                item.GetProperty("id").GetInt32() == requestId)
+                .GetProperty("description")
+                .GetString());
+
+        using var legacyPayload = await client.PostAsJsonAsync(
+            "/api/requests",
+            new { title = "Legacy-compatible request", amount = 20m });
+        Assert.Equal(HttpStatusCode.Created, legacyPayload.StatusCode);
+        using var legacyDocument = JsonDocument.Parse(
+            await legacyPayload.Content.ReadAsStringAsync());
+        Assert.Equal(
+            JsonValueKind.Null,
+            legacyDocument.RootElement.GetProperty("description").ValueKind);
+
+        using var tooLong = await client.PostAsJsonAsync(
+            "/api/requests",
+            new
+            {
+                title = "Overlong description",
+                description = new string('x', 2001),
+                amount = 20m
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, tooLong.StatusCode);
+    }
+
+    [Fact]
     public async Task Employee_CannotReadOrCancelAnotherEmployeesRequest()
     {
         using var factory = new ApiFactory();

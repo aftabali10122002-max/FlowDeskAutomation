@@ -1,3 +1,4 @@
+using FlowDesk.Application.Errors;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -26,6 +27,11 @@ public class GlobalExceptionHandler : IExceptionHandler
 
         var statusCode = exception switch
         {
+            LeaveUnauthorizedException => StatusCodes.Status403Forbidden,
+            LeaveNotFoundException => StatusCodes.Status404NotFound,
+            LeaveInvalidInputException => StatusCodes.Status400BadRequest,
+            LeaveOverlapException => StatusCodes.Status409Conflict,
+            LeaveConfigurationException => StatusCodes.Status409Conflict,
             KeyNotFoundException => StatusCodes.Status404NotFound,
             ArgumentException => StatusCodes.Status400BadRequest,
             UnauthorizedAccessException => StatusCodes.Status403Forbidden,
@@ -41,8 +47,10 @@ public class GlobalExceptionHandler : IExceptionHandler
             Status = statusCode,
             Title = statusCode == 500
                 ? "Internal Server Error"
-                : "Request failed",
-            Detail = exception is ArgumentException
+                : exception is LeaveApplicationException
+                    ? "Leave operation failed"
+                    : "Request failed",
+            Detail = exception is LeaveApplicationException or ArgumentException
                 ? exception.Message
                 : statusCode switch
                 {
@@ -53,6 +61,10 @@ public class GlobalExceptionHandler : IExceptionHandler
                     _ => "An unexpected error occurred."
                 }
         };
+        if (exception is LeaveApplicationException leaveException)
+        {
+            problem.Extensions["code"] = leaveException.Code;
+        }
 
         await httpContext.Response.WriteAsJsonAsync(
             problem,

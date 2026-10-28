@@ -43,7 +43,12 @@ public class RequestsController : ControllerBase
         {
             Id = request.Id,
             Title = request.Title,
+            Description = request.Description,
             Amount = request.Amount,
+            RequestTypeId = request.RequestTypeId,
+            RequestTypeCode = request.RequestType?.Code,
+            RequestTypeName = request.RequestType?.DisplayName,
+            RequestDetails = MapRequestDetails(request),
             Priority = request.Priority,
             Status = request.Status.ToString(),
             CreatedAtUtc = request.CreatedAtUtc,
@@ -74,6 +79,77 @@ public class RequestsController : ControllerBase
                 })
                 .ToList()
         };
+    }
+
+    private static object? MapRequestDetails(ApprovalRequest request)
+    {
+        if (request.MaterialPurchaseDetails is { } material)
+        {
+            return new
+            {
+                itemName = material.ItemName,
+                quantity = material.Quantity,
+                businessJustification = material.BusinessJustification
+            };
+        }
+
+        if (request.LeaveDetails is { } leave)
+        {
+            return new
+            {
+                leaveType = leave.LeaveType,
+                startDate = leave.StartDate,
+                endDate = leave.EndDate,
+                reason = leave.Reason,
+                totalLeaveDays = leave.TotalLeaveDays,
+                calculatedLeaveUnits = leave.CalculatedLeaveUnits,
+                cancellationOfRequestId = leave.CancellationOfRequestId
+            };
+        }
+
+        if (request.ExpenseReimbursementDetails is { } expense)
+        {
+            return new
+            {
+                category = expense.Category,
+                expenseDate = expense.ExpenseDate,
+                businessJustification = expense.BusinessJustification
+            };
+        }
+
+        if (request.ItAccessDetails is { } itAccess)
+        {
+            return new
+            {
+                systemApplication = itAccess.SystemApplication,
+                requestedAccessLevel = itAccess.RequestedAccessLevel,
+                durationDays = itAccess.DurationDays,
+                businessJustification = itAccess.BusinessJustification
+            };
+        }
+
+        if (request.TravelDetails is { } travel)
+        {
+            return new
+            {
+                destination = travel.Destination,
+                startDate = travel.StartDate,
+                endDate = travel.EndDate,
+                businessPurpose = travel.BusinessPurpose
+            };
+        }
+
+        if (request.WorkFromHomeDetails is { } workFromHome)
+        {
+            return new
+            {
+                startDate = workFromHome.StartDate,
+                endDate = workFromHome.EndDate,
+                reason = workFromHome.Reason
+            };
+        }
+
+        return null;
     }
 
     [HttpGet]
@@ -241,30 +317,46 @@ public class RequestsController : ControllerBase
     [Authorize(Roles = EmployeeRole)]
     public async Task<IActionResult> Create(CreateRequestDto dto)
     {
-        if (string.IsNullOrWhiteSpace(dto.Title))
-        {
-            return BadRequest(new { message = "Title is required." });
-        }
-
-        if (dto.Amount <= 0)
-        {
-            return BadRequest(new
-            {
-                message = "Amount must be greater than zero."
-            });
-        }
-
         var userId = GetAuthenticatedUserId();
         if (userId == null)
         {
             return Forbid();
         }
 
-        var request = await _service.CreateAsync(
-            dto.Title,
-            dto.Amount,
-            userId.Value,
-            dto.Priority);
+        ApprovalRequest request;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dto.RequestTypeCode))
+            {
+                if (string.IsNullOrWhiteSpace(dto.Title))
+                {
+                    return BadRequest(new { message = "Title is required." });
+                }
+
+                if (dto.Amount is null or <= 0)
+                {
+                    return BadRequest(new
+                    {
+                        message = "Amount must be greater than zero."
+                    });
+                }
+
+                request = await _service.CreateAsync(
+                    dto.Title,
+                    dto.Amount.Value,
+                    userId.Value,
+                    dto.Priority,
+                    dto.Description);
+            }
+            else
+            {
+                request = await _service.CreateTypedAsync(dto, userId.Value);
+            }
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
 
         return CreatedAtAction(
             nameof(GetById),
@@ -369,6 +461,28 @@ public class RequestsController : ControllerBase
         };
     }
 
+    [HttpPost("{id:int}/cancellation-requests")]
+    [Authorize(Roles = EmployeeRole)]
+    public async Task<IActionResult> CreateLeaveCancellationRequest(
+        int id,
+        [FromBody] LeaveCancellationInput input)
+    {
+        var userId = GetAuthenticatedUserId();
+        if (userId is null)
+        {
+            return Forbid();
+        }
+
+        var cancellation = await _service.CreateLeaveCancellationAsync(
+            id,
+            userId.Value,
+            input);
+        return CreatedAtAction(
+            nameof(GetById),
+            new { id = cancellation.Id },
+            MapToDto(cancellation));
+    }
+
     private int? GetAuthenticatedUserId()
     {
         var claimValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -399,6 +513,11 @@ public class RequestsController : ControllerBase
                 new { message = "Request not found." }),
             ApprovalActionResult.Conflict => Conflict(
                 new { message = "Request is no longer pending." }),
+            ApprovalActionResult.AttachmentsNotClean => Conflict(
+                new
+                {
+                    message = "Approval is blocked until every request attachment has completed a clean malware scan."
+                }),
             _ => StatusCode(StatusCodes.Status500InternalServerError)
         };
     }

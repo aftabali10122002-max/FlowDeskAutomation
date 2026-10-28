@@ -13,6 +13,8 @@ public interface IApprovalRequestRepository
     Task<List<ApprovalRequest>> GetLegacyAsync();
 
     Task<ApprovalRequest?> GetOwnedByIdAsync(int id, int userId);
+    Task<bool> HasLeaveCancellationRequestAsync(int originalRequestId);
+    Task<bool> HasScheduledLeaveCommitmentAsync(int originalRequestId);
 
     Task<ApprovalRequest?> GetAssignedToManagerByIdAsync(int id, int userId);
 

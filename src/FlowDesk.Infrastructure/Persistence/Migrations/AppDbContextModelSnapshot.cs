@@ -115,7 +115,7 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<decimal>("Amount")
+                    b.Property<decimal?>("Amount")
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("CreatedAtUtc")
@@ -127,7 +127,14 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.Property<int?>("DepartmentId")
                         .HasColumnType("int");
 
+                    b.Property<string>("Description")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
                     b.Property<int?>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RequestTypeId")
                         .HasColumnType("int");
 
                     b.Property<int>("Status")
@@ -139,6 +146,8 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(200)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("RequestTypeId");
 
                     b.HasIndex("CreatedByUserId", "CreatedAtUtc");
 
@@ -254,6 +263,9 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("PublishedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<int?>("RequestTypeId")
+                        .HasColumnType("int");
+
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
@@ -268,6 +280,8 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("DepartmentId");
+
+                    b.HasIndex("RequestTypeId");
 
                     b.HasIndex("WorkflowKey", "Version")
                         .IsUnique();
@@ -400,6 +414,50 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("FlowDesk.Domain.Entities.AuditLogEntry", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.Property<int>("ActorUserId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Details")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<long>("EntityId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorUserId");
+
+                    b.HasIndex("OccurredAtUtc");
+
+                    b.HasIndex("Action", "OccurredAtUtc");
+
+                    b.HasIndex("EntityType", "EntityId");
+
+                    b.ToTable("AuditLogEntries", (string)null);
+                });
+
             modelBuilder.Entity("FlowDesk.Domain.Entities.Department", b =>
                 {
                     b.Property<int>("Id")
@@ -433,6 +491,1115 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("Departments", (string)null);
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.Designation", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("Designations", (string)null);
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.EmployeeEmploymentProfile", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int?>("DesignationId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("EmploymentType")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly?>("HireDate")
+                        .HasColumnType("date");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DesignationId");
+
+                    b.HasIndex("UserId", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "EffectiveTo");
+
+                    b.HasIndex("UserId", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("EmployeeEmploymentProfiles", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_EmployeeEmploymentProfiles_EffectiveRange", "[EffectiveTo] IS NULL OR [EffectiveTo] >= [EffectiveFrom]");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.ExpenseReimbursementRequestDetails", b =>
+                {
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BusinessJustification")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateOnly>("ExpenseDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("RequestId");
+
+                    b.ToTable("ExpenseReimbursementRequestDetails", (string)null);
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.ItAccessRequestDetails", b =>
+                {
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BusinessJustification")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<int?>("DurationDays")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RequestedAccessLevel")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("SystemApplication")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.HasKey("RequestId");
+
+                    b.ToTable("ItAccessRequestDetails", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_ItAccessRequestDetails_DurationDays", "[DurationDays] IS NULL OR [DurationDays] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveBalanceAllocation", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateOnly>("LeaveDate")
+                        .HasColumnType("date");
+
+                    b.Property<long>("LedgerEntryId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("SourceEntryId")
+                        .HasColumnType("bigint");
+
+                    b.Property<decimal>("Units")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceEntryId");
+
+                    b.HasIndex("LedgerEntryId", "SourceEntryId", "LeaveDate")
+                        .IsUnique();
+
+                    b.ToTable("LeaveBalanceAllocations", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveBalanceAllocations_Units", "[Units] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveBalanceLedgerEntry", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int?>("ActorUserId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EffectiveDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("EmployeeUserId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("EntryType")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly?>("ExpiresOn")
+                        .HasColumnType("date");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateOnly?>("LeaveDate")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("LeavePolicyId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LeaveTypeId")
+                        .HasColumnType("int");
+
+                    b.Property<long?>("PayPeriodId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int?>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<long?>("SourceEntryId")
+                        .HasColumnType("bigint");
+
+                    b.Property<decimal>("Units")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorUserId");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("LeavePolicyId");
+
+                    b.HasIndex("LeaveTypeId");
+
+                    b.HasIndex("PayPeriodId");
+
+                    b.HasIndex("RequestId");
+
+                    b.HasIndex("SourceEntryId");
+
+                    b.HasIndex("EmployeeUserId", "LeaveTypeId", "EffectiveDate", "CreatedAtUtc");
+
+                    b.ToTable("LeaveBalanceLedgerEntries", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveBalanceLedgerEntries_Type", "[EntryType] BETWEEN 1 AND 11");
+
+                            t.HasCheckConstraint("CK_LeaveBalanceLedgerEntries_Units", "[Units] <> 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveHoliday", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<int>("LeaveHolidayCalendarId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaveHolidayCalendarId", "Date")
+                        .IsUnique();
+
+                    b.ToTable("LeaveHolidays", (string)null);
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveHolidayCalendar", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Region")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("LeaveHolidayCalendars", (string)null);
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePayPeriod", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("EntitlementYear")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LeavePayrollCalendarId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("PeriodNumber")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("PostingDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeavePayrollCalendarId", "StartDate");
+
+                    b.HasIndex("LeavePayrollCalendarId", "EntitlementYear", "PeriodNumber")
+                        .IsUnique();
+
+                    b.ToTable("LeavePayPeriods", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeavePayPeriods_DateRange", "[EndDate] >= [StartDate] AND [PostingDate] >= [EndDate]");
+
+                            t.HasCheckConstraint("CK_LeavePayPeriods_PeriodIdentifiers", "[EntitlementYear] >= 1 AND [PeriodNumber] >= 1");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePayrollCalendar", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int>("ExpectedPeriodsInEntitlementYear")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("LeavePayrollCalendars", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeavePayrollCalendars_ExpectedPeriods", "[ExpectedPeriodsInEntitlementYear] BETWEEN 1 AND 366");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePolicy", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("AccrualFrequency")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("AllowsCarryForward")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("AllowsHalfDays")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("AllowsLeaveDuringProbation")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("AllowsNegativeBalance")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal?>("CarryForwardCap")
+                        .HasColumnType("decimal(9,2)");
+
+                    b.Property<int?>("CarryForwardExpiryMonths")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int>("DayCalculationMethod")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("DepartmentId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("DesignationId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("EmploymentType")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("HalfDayUnits")
+                        .HasColumnType("decimal(5,2)");
+
+                    b.Property<bool>("IsAccrualEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("LeaveHolidayCalendarId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LeavePayrollCalendarId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LeaveWorkScheduleId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<int?>("ProbationPeriodDays")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("PublishedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("PublishedByUserId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Scope")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime?>("SupersededAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("SupersededByPolicyId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaveHolidayCalendarId");
+
+                    b.HasIndex("LeavePayrollCalendarId");
+
+                    b.HasIndex("LeaveWorkScheduleId");
+
+                    b.HasIndex("PublishedByUserId");
+
+                    b.HasIndex("SupersededByPolicyId")
+                        .IsUnique()
+                        .HasFilter("[SupersededByPolicyId] IS NOT NULL");
+
+                    b.HasIndex("Code", "Version")
+                        .IsUnique()
+                        .HasFilter("[Scope] = 1");
+
+                    b.HasIndex("EffectiveFrom", "EffectiveTo")
+                        .HasFilter("[Scope] = 1 AND [Status] IN (2, 3)");
+
+                    b.HasIndex("Code", "Version", "DepartmentId")
+                        .IsUnique()
+                        .HasFilter("[Scope] = 2 AND [DepartmentId] IS NOT NULL");
+
+                    b.HasIndex("Code", "Version", "DesignationId")
+                        .IsUnique()
+                        .HasFilter("[Scope] = 3 AND [DesignationId] IS NOT NULL");
+
+                    b.HasIndex("Code", "Version", "EmploymentType")
+                        .IsUnique()
+                        .HasFilter("[Scope] = 4 AND [EmploymentType] IS NOT NULL");
+
+                    b.HasIndex("DepartmentId", "EffectiveFrom", "EffectiveTo")
+                        .HasFilter("[Scope] = 2 AND [Status] IN (2, 3)");
+
+                    b.HasIndex("DesignationId", "EffectiveFrom", "EffectiveTo")
+                        .HasFilter("[Scope] = 3 AND [Status] IN (2, 3)");
+
+                    b.HasIndex("EmploymentType", "EffectiveFrom", "EffectiveTo")
+                        .HasFilter("[Scope] = 4 AND [Status] IN (2, 3)");
+
+                    b.HasIndex("Scope", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("LeavePolicies", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeavePolicies_AccrualSettings", "([IsAccrualEnabled] = 1 AND [AccrualFrequency] IN (1, 2, 3)) OR ([IsAccrualEnabled] = 0 AND [AccrualFrequency] IS NULL)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_CarryForwardSettings", "([AllowsCarryForward] = 1 AND [CarryForwardCap] >= 0 AND ([CarryForwardExpiryMonths] IS NULL OR [CarryForwardExpiryMonths] > 0)) OR ([AllowsCarryForward] = 0 AND [CarryForwardCap] IS NULL AND [CarryForwardExpiryMonths] IS NULL)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_DayCalculation", "([DayCalculationMethod] = 1) OR ([DayCalculationMethod] = 2 AND [LeaveWorkScheduleId] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_EffectiveRange", "[EffectiveTo] IS NULL OR [EffectiveTo] >= [EffectiveFrom]");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_HalfDaySettings", "([AllowsHalfDays] = 0 AND [HalfDayUnits] IS NULL) OR ([AllowsHalfDays] = 1 AND [HalfDayUnits] > 0 AND [HalfDayUnits] < 1)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_Lifecycle", "([Status] = 1 AND [PublishedAtUtc] IS NULL AND [PublishedByUserId] IS NULL AND [SupersededAtUtc] IS NULL AND [SupersededByPolicyId] IS NULL) OR ([Status] = 2 AND [PublishedAtUtc] IS NOT NULL AND [PublishedByUserId] IS NOT NULL AND [SupersededAtUtc] IS NULL AND [SupersededByPolicyId] IS NULL) OR ([Status] = 3 AND [PublishedAtUtc] IS NOT NULL AND [PublishedByUserId] IS NOT NULL AND [SupersededAtUtc] IS NOT NULL AND [SupersededByPolicyId] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_NotSelfSuperseded", "[SupersededByPolicyId] IS NULL OR [SupersededByPolicyId] <> [Id]");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_PayrollCalendar", "([AccrualFrequency] = 3 AND [LeavePayrollCalendarId] IS NOT NULL) OR ([AccrualFrequency] IS NULL OR [AccrualFrequency] <> 3) AND [LeavePayrollCalendarId] IS NULL");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_ProbationPeriod", "[ProbationPeriodDays] IS NULL OR [ProbationPeriodDays] > 0");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_ScopeEnum", "[Scope] IN (1, 2, 3, 4)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_ScopeTarget", "([Scope] = 1 AND [DepartmentId] IS NULL AND [DesignationId] IS NULL AND [EmploymentType] IS NULL) OR ([Scope] = 2 AND [DepartmentId] IS NOT NULL AND [DesignationId] IS NULL AND [EmploymentType] IS NULL) OR ([Scope] = 3 AND [DepartmentId] IS NULL AND [DesignationId] IS NOT NULL AND [EmploymentType] IS NULL) OR ([Scope] = 4 AND [DepartmentId] IS NULL AND [DesignationId] IS NULL AND [EmploymentType] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_Status", "[Status] IN (1, 2, 3)");
+
+                            t.HasCheckConstraint("CK_LeavePolicies_Version", "[Version] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePolicyAssignment", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("AssignedByAdminUserId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<int>("LeavePolicyId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AssignedByAdminUserId");
+
+                    b.HasIndex("LeavePolicyId");
+
+                    b.HasIndex("UserId", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "EffectiveTo");
+
+                    b.HasIndex("UserId", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("LeavePolicyAssignments", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeavePolicyAssignments_EffectiveRange", "[EffectiveTo] IS NULL OR [EffectiveTo] >= [EffectiveFrom]");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePolicyEntitlement", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("AnnualEntitlement")
+                        .HasColumnType("decimal(9,2)");
+
+                    b.Property<int>("LeavePolicyId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LeaveTypeId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaveTypeId");
+
+                    b.HasIndex("LeavePolicyId", "LeaveTypeId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyEntitlements", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeavePolicyEntitlements_AnnualEntitlement", "[AnnualEntitlement] >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveRequestDetails", b =>
+                {
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("CalculatedLeaveUnits")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int?>("CancellationOfRequestId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ConfiguredLeaveTypeId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("EndDayPortion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<string>("LeaveType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("StartDayPortion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<int>("TotalLeaveDays")
+                        .HasColumnType("int");
+
+                    b.HasKey("RequestId");
+
+                    b.HasIndex("CancellationOfRequestId")
+                        .IsUnique()
+                        .HasFilter("[CancellationOfRequestId] IS NOT NULL");
+
+                    b.HasIndex("ConfiguredLeaveTypeId");
+
+                    b.ToTable("LeaveRequestDetails", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveRequestDetails_CalculatedLeaveUnits", "[CalculatedLeaveUnits] IS NULL OR [CalculatedLeaveUnits] > 0");
+
+                            t.HasCheckConstraint("CK_LeaveRequestDetails_CancellationOfRequest", "[CancellationOfRequestId] IS NULL OR [CancellationOfRequestId] > 0");
+
+                            t.HasCheckConstraint("CK_LeaveRequestDetails_DateRange", "[EndDate] >= [StartDate]");
+
+                            t.HasCheckConstraint("CK_LeaveRequestDetails_DayPortions", "[StartDayPortion] IN (1, 2) AND [EndDayPortion] IN (1, 2)");
+
+                            t.HasCheckConstraint("CK_LeaveRequestDetails_TotalLeaveDays", "[TotalLeaveDays] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveRequestPolicyDay", b =>
+                {
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("LeaveDate")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("AllowsNegativeBalance")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("LeavePolicyId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Units")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("RequestId", "LeaveDate");
+
+                    b.HasIndex("LeavePolicyId");
+
+                    b.ToTable("LeaveRequestPolicyDays", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveRequestPolicyDays_Units", "[Units] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveType", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("bit");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("LeaveTypes", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Code = "ANNUAL",
+                            DisplayName = "Annual Leave",
+                            IsEnabled = true,
+                            IsPaid = true
+                        },
+                        new
+                        {
+                            Id = 2,
+                            Code = "SICK",
+                            DisplayName = "Sick Leave",
+                            IsEnabled = true,
+                            IsPaid = true
+                        },
+                        new
+                        {
+                            Id = 3,
+                            Code = "CASUAL",
+                            DisplayName = "Casual Leave",
+                            IsEnabled = true,
+                            IsPaid = true
+                        },
+                        new
+                        {
+                            Id = 4,
+                            Code = "UNPAID",
+                            DisplayName = "Unpaid Leave",
+                            IsEnabled = true,
+                            IsPaid = false
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveWorkSchedule", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("LeaveWorkSchedules", (string)null);
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveWorkScheduleDay", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("DayOfWeek")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsWorkingDay")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("LeaveWorkScheduleId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("StandardHours")
+                        .HasColumnType("decimal(4,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaveWorkScheduleId", "DayOfWeek")
+                        .IsUnique();
+
+                    b.ToTable("LeaveWorkScheduleDays", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveWorkScheduleDays_DayOfWeek", "[DayOfWeek] BETWEEN 0 AND 6");
+
+                            t.HasCheckConstraint("CK_LeaveWorkScheduleDays_StandardHours", "[StandardHours] >= 0 AND [StandardHours] <= 24");
+
+                            t.HasCheckConstraint("CK_LeaveWorkScheduleDays_WorkingDayHours", "([IsWorkingDay] = 1 AND [StandardHours] > 0) OR ([IsWorkingDay] = 0 AND [StandardHours] = 0)");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.MaterialPurchaseRequestDetails", b =>
+                {
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BusinessJustification")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("ItemName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
+                    b.HasKey("RequestId");
+
+                    b.ToTable("MaterialPurchaseRequestDetails", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_MaterialPurchaseRequestDetails_Quantity", "[Quantity] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.RequestAttachment", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid>("ClientUploadId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("DeletedByUserId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Extension")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<DateTime?>("LastScanAttemptAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("MediaType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime?>("NextScanAttemptAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ScanAttempts")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ScanFailureCode")
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<DateTime?>("ScanLeaseExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("ScanLeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ScanStatus")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ScannedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ScannerName")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("char(64)")
+                        .IsFixedLength();
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("StorageCleanupPending")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("StorageKey")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("UploadedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("UploadedByUserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientUploadId")
+                        .IsUnique();
+
+                    b.HasIndex("DeletedByUserId");
+
+                    b.HasIndex("StorageKey")
+                        .IsUnique();
+
+                    b.HasIndex("UploadedByUserId");
+
+                    b.HasIndex("StorageCleanupPending", "DeletedAtUtc");
+
+                    b.HasIndex("RequestId", "DeletedAtUtc", "UploadedAtUtc");
+
+                    b.HasIndex("ScanStatus", "NextScanAttemptAtUtc", "ScanLeaseExpiresAtUtc", "Id");
+
+                    b.ToTable("RequestAttachments", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_RequestAttachments_DeletionAudit", "([DeletedAtUtc] IS NULL AND [DeletedByUserId] IS NULL AND [StorageCleanupPending] = 0) OR ([DeletedAtUtc] IS NOT NULL AND [DeletedByUserId] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_RequestAttachments_ScanAttempts", "[ScanAttempts] >= 0");
+
+                            t.HasCheckConstraint("CK_RequestAttachments_ScanStatus", "[ScanStatus] IN (0, 1, 2, 3)");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.RequestType", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("RequiresAmount")
+                        .HasColumnType("bit");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("RequestTypes", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Code = "MATERIAL_PURCHASE",
+                            DisplayName = "Material Purchase",
+                            IsEnabled = true,
+                            RequiresAmount = true
+                        },
+                        new
+                        {
+                            Id = 2,
+                            Code = "LEAVE",
+                            DisplayName = "Leave Request",
+                            IsEnabled = true,
+                            RequiresAmount = false
+                        },
+                        new
+                        {
+                            Id = 3,
+                            Code = "EXPENSE_REIMBURSEMENT",
+                            DisplayName = "Expense Reimbursement",
+                            IsEnabled = true,
+                            RequiresAmount = true
+                        },
+                        new
+                        {
+                            Id = 4,
+                            Code = "IT_ACCESS",
+                            DisplayName = "IT Access",
+                            IsEnabled = true,
+                            RequiresAmount = false
+                        },
+                        new
+                        {
+                            Id = 5,
+                            Code = "TRAVEL",
+                            DisplayName = "Travel Request",
+                            IsEnabled = true,
+                            RequiresAmount = true
+                        },
+                        new
+                        {
+                            Id = 6,
+                            Code = "WORK_FROM_HOME",
+                            DisplayName = "Work From Home",
+                            IsEnabled = true,
+                            RequiresAmount = false
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.TravelRequestDetails", b =>
+                {
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BusinessPurpose")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("Destination")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("RequestId");
+
+                    b.ToTable("TravelRequestDetails", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_TravelRequestDetails_DateRange", "[EndDate] >= [StartDate]");
+                        });
                 });
 
             modelBuilder.Entity("FlowDesk.Domain.Entities.User", b =>
@@ -469,6 +1636,14 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("PhoneNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("ProfileImageStorageKey")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<string>("Role")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -484,6 +1659,30 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.ToTable("Users", null, t =>
                         {
                             t.HasCheckConstraint("CK_Users_Role", "[Role] IN ('Employee', 'Manager', 'Admin')");
+                        });
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.WorkFromHomeRequestDetails", b =>
+                {
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("RequestId");
+
+                    b.ToTable("WorkFromHomeRequestDetails", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_WorkFromHomeRequestDetails_DateRange", "[EndDate] >= [StartDate]");
                         });
                 });
 
@@ -661,9 +1860,16 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         .HasForeignKey("DepartmentId")
                         .OnDelete(DeleteBehavior.NoAction);
 
+                    b.HasOne("FlowDesk.Domain.Entities.RequestType", "RequestType")
+                        .WithMany()
+                        .HasForeignKey("RequestTypeId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.Navigation("CreatedByUser");
 
                     b.Navigation("Department");
+
+                    b.Navigation("RequestType");
                 });
 
             modelBuilder.Entity("FlowDesk.Domain.Entities.ApprovalWorkflowEscalation", b =>
@@ -711,7 +1917,14 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         .HasForeignKey("DepartmentId")
                         .OnDelete(DeleteBehavior.NoAction);
 
+                    b.HasOne("FlowDesk.Domain.Entities.RequestType", "RequestType")
+                        .WithMany()
+                        .HasForeignKey("RequestTypeId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.Navigation("Department");
+
+                    b.Navigation("RequestType");
                 });
 
             modelBuilder.Entity("FlowDesk.Domain.Entities.ApprovalWorkflowRuleStage", b =>
@@ -772,6 +1985,345 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.Navigation("WorkflowInstance");
                 });
 
+            modelBuilder.Entity("FlowDesk.Domain.Entities.AuditLogEntry", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("ActorUserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.EmployeeEmploymentProfile", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.Designation", "Designation")
+                        .WithMany()
+                        .HasForeignKey("DesignationId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Designation");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.ExpenseReimbursementRequestDetails", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithOne("ExpenseReimbursementDetails")
+                        .HasForeignKey("FlowDesk.Domain.Entities.ExpenseReimbursementRequestDetails", "RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.ItAccessRequestDetails", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithOne("ItAccessDetails")
+                        .HasForeignKey("FlowDesk.Domain.Entities.ItAccessRequestDetails", "RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveBalanceAllocation", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveBalanceLedgerEntry", "LedgerEntry")
+                        .WithMany("Allocations")
+                        .HasForeignKey("LedgerEntryId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveBalanceLedgerEntry", "SourceEntry")
+                        .WithMany()
+                        .HasForeignKey("SourceEntryId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("LedgerEntry");
+
+                    b.Navigation("SourceEntry");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveBalanceLedgerEntry", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.User", "Actor")
+                        .WithMany()
+                        .HasForeignKey("ActorUserId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.User", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeUserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePolicy", "LeavePolicy")
+                        .WithMany()
+                        .HasForeignKey("LeavePolicyId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("LeaveTypeId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePayPeriod", "PayPeriod")
+                        .WithMany()
+                        .HasForeignKey("PayPeriodId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithMany()
+                        .HasForeignKey("RequestId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveBalanceLedgerEntry", "SourceEntry")
+                        .WithMany()
+                        .HasForeignKey("SourceEntryId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("Actor");
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("LeavePolicy");
+
+                    b.Navigation("LeaveType");
+
+                    b.Navigation("PayPeriod");
+
+                    b.Navigation("Request");
+
+                    b.Navigation("SourceEntry");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveHoliday", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveHolidayCalendar", "LeaveHolidayCalendar")
+                        .WithMany("Holidays")
+                        .HasForeignKey("LeaveHolidayCalendarId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("LeaveHolidayCalendar");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePayPeriod", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePayrollCalendar", "LeavePayrollCalendar")
+                        .WithMany("Periods")
+                        .HasForeignKey("LeavePayrollCalendarId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("LeavePayrollCalendar");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePolicy", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.Designation", "Designation")
+                        .WithMany()
+                        .HasForeignKey("DesignationId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveHolidayCalendar", "LeaveHolidayCalendar")
+                        .WithMany()
+                        .HasForeignKey("LeaveHolidayCalendarId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePayrollCalendar", "LeavePayrollCalendar")
+                        .WithMany()
+                        .HasForeignKey("LeavePayrollCalendarId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveWorkSchedule", "LeaveWorkSchedule")
+                        .WithMany()
+                        .HasForeignKey("LeaveWorkScheduleId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.User", "PublishedByUser")
+                        .WithMany()
+                        .HasForeignKey("PublishedByUserId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePolicy", "SupersededByPolicy")
+                        .WithMany()
+                        .HasForeignKey("SupersededByPolicyId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("Department");
+
+                    b.Navigation("Designation");
+
+                    b.Navigation("LeaveHolidayCalendar");
+
+                    b.Navigation("LeavePayrollCalendar");
+
+                    b.Navigation("LeaveWorkSchedule");
+
+                    b.Navigation("PublishedByUser");
+
+                    b.Navigation("SupersededByPolicy");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePolicyAssignment", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.User", "AssignedByAdminUser")
+                        .WithMany()
+                        .HasForeignKey("AssignedByAdminUserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePolicy", "LeavePolicy")
+                        .WithMany()
+                        .HasForeignKey("LeavePolicyId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("AssignedByAdminUser");
+
+                    b.Navigation("LeavePolicy");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePolicyEntitlement", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePolicy", "LeavePolicy")
+                        .WithMany("Entitlements")
+                        .HasForeignKey("LeavePolicyId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("LeaveTypeId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicy");
+
+                    b.Navigation("LeaveType");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveRequestDetails", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", null)
+                        .WithMany()
+                        .HasForeignKey("CancellationOfRequestId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveType", null)
+                        .WithMany()
+                        .HasForeignKey("ConfiguredLeaveTypeId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithOne("LeaveDetails")
+                        .HasForeignKey("FlowDesk.Domain.Entities.LeaveRequestDetails", "RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveRequestPolicyDay", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.LeavePolicy", "LeavePolicy")
+                        .WithMany()
+                        .HasForeignKey("LeavePolicyId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithMany("LeavePolicyDays")
+                        .HasForeignKey("RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicy");
+
+                    b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveWorkScheduleDay", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.LeaveWorkSchedule", "LeaveWorkSchedule")
+                        .WithMany("Days")
+                        .HasForeignKey("LeaveWorkScheduleId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("LeaveWorkSchedule");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.MaterialPurchaseRequestDetails", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithOne("MaterialPurchaseDetails")
+                        .HasForeignKey("FlowDesk.Domain.Entities.MaterialPurchaseRequestDetails", "RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.RequestAttachment", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("DeletedByUserId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithMany("Attachments")
+                        .HasForeignKey("RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("FlowDesk.Domain.Entities.User", "UploadedByUser")
+                        .WithMany()
+                        .HasForeignKey("UploadedByUserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Request");
+
+                    b.Navigation("UploadedByUser");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.TravelRequestDetails", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithOne("TravelDetails")
+                        .HasForeignKey("FlowDesk.Domain.Entities.TravelRequestDetails", "RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Request");
+                });
+
             modelBuilder.Entity("FlowDesk.Domain.Entities.User", b =>
                 {
                     b.HasOne("FlowDesk.Domain.Entities.Department", "Department")
@@ -780,6 +2332,17 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.NoAction);
 
                     b.Navigation("Department");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.WorkFromHomeRequestDetails", b =>
+                {
+                    b.HasOne("FlowDesk.Domain.Entities.ApprovalRequest", "Request")
+                        .WithOne("WorkFromHomeDetails")
+                        .HasForeignKey("FlowDesk.Domain.Entities.WorkFromHomeRequestDetails", "RequestId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Request");
                 });
 
             modelBuilder.Entity("FlowDesk.Domain.Entities.WorkflowEmailOutboxMessage", b =>
@@ -830,6 +2393,22 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                 {
                     b.Navigation("Assignments");
 
+                    b.Navigation("Attachments");
+
+                    b.Navigation("ExpenseReimbursementDetails");
+
+                    b.Navigation("ItAccessDetails");
+
+                    b.Navigation("LeaveDetails");
+
+                    b.Navigation("LeavePolicyDays");
+
+                    b.Navigation("MaterialPurchaseDetails");
+
+                    b.Navigation("TravelDetails");
+
+                    b.Navigation("WorkFromHomeDetails");
+
                     b.Navigation("WorkflowInstance");
                 });
 
@@ -855,6 +2434,31 @@ namespace FlowDesk.Infrastructure.Persistence.Migrations
                     b.Navigation("ApprovalRequests");
 
                     b.Navigation("Users");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveBalanceLedgerEntry", b =>
+                {
+                    b.Navigation("Allocations");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveHolidayCalendar", b =>
+                {
+                    b.Navigation("Holidays");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePayrollCalendar", b =>
+                {
+                    b.Navigation("Periods");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeavePolicy", b =>
+                {
+                    b.Navigation("Entitlements");
+                });
+
+            modelBuilder.Entity("FlowDesk.Domain.Entities.LeaveWorkSchedule", b =>
+                {
+                    b.Navigation("Days");
                 });
 
             modelBuilder.Entity("FlowDesk.Domain.Entities.User", b =>

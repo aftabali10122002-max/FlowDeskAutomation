@@ -9,5 +9,6 @@ public enum WorkflowNotificationType
     RequestRejected = 5,
     RequestCancelled = 6,
     DeadlineReminder = 7,
-    Escalation = 8
+    Escalation = 8,
+    RequestNeedsAdminAssignment = 9
 }

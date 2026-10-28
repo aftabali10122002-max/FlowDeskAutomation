@@ -13,10 +13,14 @@ namespace FlowDisk.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly AuthenticationService _authService;
+    private readonly ProfileService _profileService;
 
-    public AuthController(AuthenticationService authService)
+    public AuthController(
+        AuthenticationService authService,
+        ProfileService profileService)
     {
         _authService = authService;
+        _profileService = profileService;
     }
 
     [HttpPost("register")]
@@ -75,26 +79,16 @@ public class AuthController : ControllerBase
 
 [Authorize]
 [HttpGet("me")]
-public IActionResult GetCurrentUser()
+public async Task<IActionResult> GetCurrentUser()
 {
     var userId = User.FindFirstValue(
         ClaimTypes.NameIdentifier);
-
-    var fullName = User.FindFirstValue(
-        ClaimTypes.Name);
-
-    var email = User.FindFirstValue(
-        ClaimTypes.Email);
-
-    var role = User.FindFirstValue(
-        ClaimTypes.Role);
-
-    return Ok(new
+    if (!int.TryParse(userId, out var parsedUserId) || parsedUserId <= 0)
     {
-        UserId = userId,
-        FullName = fullName,
-        Email = email,
-        Role = role
-    });
+        return Forbid();
+    }
+
+    var profile = await _profileService.GetMyProfileAsync(parsedUserId);
+    return profile is null ? Forbid() : Ok(profile);
 }
 }

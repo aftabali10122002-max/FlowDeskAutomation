@@ -9,15 +9,18 @@ public class AdminManagementService
     private readonly IUserRepository _userRepository;
     private readonly IDepartmentRepository _departmentRepository;
     private readonly IPasswordHasher _passwordHasher;
+    private readonly IAuditLogRepository _auditLogRepository;
 
     public AdminManagementService(
         IUserRepository userRepository,
         IDepartmentRepository departmentRepository,
-        IPasswordHasher passwordHasher)
+        IPasswordHasher passwordHasher,
+        IAuditLogRepository auditLogRepository)
     {
         _userRepository = userRepository;
         _departmentRepository = departmentRepository;
         _passwordHasher = passwordHasher;
+        _auditLogRepository = auditLogRepository;
     }
 
     public async Task<List<User>> GetUsersAsync(int adminUserId)
@@ -70,7 +73,26 @@ public class AdminManagementService
                 "The last Administrator cannot be demoted.");
         }
 
+        var previousRole = user.Role;
         user.ChangeRole(normalizedRole);
+        if (!string.Equals(
+            previousRole,
+            user.Role,
+            StringComparison.Ordinal))
+        {
+            _auditLogRepository.Add(new AuditLogEntry(
+                adminUserId,
+                "user.role_changed",
+                "User",
+                userId,
+                DateTime.UtcNow,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    from = previousRole,
+                    to = user.Role
+                })));
+        }
+
         await _userRepository.SaveChangesAsync();
         return user;
     }
@@ -110,7 +132,23 @@ public class AdminManagementService
                 "A Manager with open approval work cannot be deactivated.");
         }
 
+        var wasActive = user.IsActive;
         user.SetActive(isActive);
+        if (wasActive != user.IsActive)
+        {
+            _auditLogRepository.Add(new AuditLogEntry(
+                adminUserId,
+                user.IsActive ? "user.activated" : "user.deactivated",
+                "User",
+                userId,
+                DateTime.UtcNow,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    from = wasActive,
+                    to = user.IsActive
+                })));
+        }
+
         await _userRepository.SaveChangesAsync();
         return user;
     }

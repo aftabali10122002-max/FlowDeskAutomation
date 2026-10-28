@@ -8,6 +8,8 @@ public sealed class ApprovalWorkflowRule
     public string WorkflowKey { get; private set; } = string.Empty;
     public string Name { get; private set; } = string.Empty;
     public int Version { get; private set; }
+    public int? RequestTypeId { get; private set; }
+    public RequestType? RequestType { get; private set; }
     public int? DepartmentId { get; private set; }
     public Department? Department { get; private set; }
     public decimal MinimumAmount { get; private set; }
@@ -30,7 +32,8 @@ public sealed class ApprovalWorkflowRule
         decimal minimumAmount,
         decimal? maximumAmountExclusive,
         RequestPriority? priority,
-        IEnumerable<ApprovalWorkflowRuleStage> stages)
+        IEnumerable<ApprovalWorkflowRuleStage> stages,
+        int? requestTypeId = null)
     {
         UpdateDraft(
             workflowKey,
@@ -39,7 +42,8 @@ public sealed class ApprovalWorkflowRule
             minimumAmount,
             maximumAmountExclusive,
             priority,
-            stages);
+            stages,
+            requestTypeId);
         if (version <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(version));
@@ -55,7 +59,8 @@ public sealed class ApprovalWorkflowRule
         decimal minimumAmount,
         decimal? maximumAmountExclusive,
         RequestPriority? priority,
-        IEnumerable<ApprovalWorkflowRuleStage> stages)
+        IEnumerable<ApprovalWorkflowRuleStage> stages,
+        int? requestTypeId = null)
     {
         if (Status != ApprovalWorkflowRuleStatus.Draft)
         {
@@ -81,6 +86,11 @@ public sealed class ApprovalWorkflowRule
         if (departmentId is <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(departmentId));
+        }
+
+        if (requestTypeId is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestTypeId));
         }
 
         if (minimumAmount < 0 ||
@@ -111,6 +121,7 @@ public sealed class ApprovalWorkflowRule
 
         WorkflowKey = workflowKey.Trim();
         Name = name.Trim();
+        RequestTypeId = requestTypeId;
         DepartmentId = departmentId;
         MinimumAmount = minimumAmount;
         MaximumAmountExclusive = maximumAmountExclusive;

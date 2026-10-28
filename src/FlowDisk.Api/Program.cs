@@ -9,8 +9,11 @@ using FlowDesk.Infrastructure.Repositories;
 using FlowDesk.Infrastructure.Security;
 using FlowDisk.Api.Exceptions;
 using FlowDisk.Api.Hubs;
+using FlowDisk.Api.Leave;
 using FlowDisk.Api.Notifications;
+using FlowDisk.Api.Reports;
 using FlowDisk.Api.Security;
+using FlowDisk.Api.Attachments;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -33,7 +36,6 @@ var loginPermitLimit = GetPositiveRateLimit(
 var registrationPermitLimit = GetPositiveRateLimit(
     builder.Configuration,
     "RateLimiting:Registration:PermitLimit");
-
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -83,6 +85,7 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -116,6 +119,13 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<
     IApprovalRequestRepository,
     ApprovalRequestRepository>();
+builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+builder.Services.AddScoped<
+    IRequestAttachmentRepository,
+    RequestAttachmentRepository>();
+builder.Services.AddScoped<AttachmentIntakeService>();
+builder.Services.AddSingleton<AttachmentUploadConcurrencyLimiter>();
+builder.Services.AddScoped<AttachmentUploadConcurrencyResourceFilter>();
 builder.Services.AddScoped<
     IApprovalWorkflowRepository,
     ApprovalWorkflowRepository>();
@@ -123,8 +133,24 @@ builder.Services.AddScoped<
     IUserRepository,
     UserRepository>();
 builder.Services.AddScoped<
+    IRequestTypeRepository,
+    RequestTypeRepository>();
+builder.Services.AddScoped<
     IDepartmentRepository,
     DepartmentRepository>();
+builder.Services.AddScoped<
+    IDashboardAnalyticsRepository,
+    DashboardAnalyticsRepository>();
+builder.Services.AddScoped<IReportsRepository, ReportsRepository>();
+builder.Services.AddScoped<
+    ILeaveManagementRepository,
+    LeaveManagementRepository>();
+builder.Services.AddScoped<
+    ILeaveAccountingRepository,
+    LeaveAccountingRepository>();
+builder.Services.AddScoped<
+    ILeaveCatalogRepository,
+    LeaveCatalogRepository>();
 
 builder.Services.AddScoped<
     IPasswordHasher,
@@ -135,15 +161,64 @@ builder.Services.AddScoped<
 
 builder.Services.AddScoped<ApprovalRequestService>();
 builder.Services.AddScoped<ApprovalWorkflowService>();
+builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<AuthenticationService>();
 builder.Services.AddScoped<AdminManagementService>();
+builder.Services.AddScoped<ProfileService>();
+builder.Services.AddScoped<RequestTypeService>();
+builder.Services.AddScoped<DashboardAnalyticsService>();
+builder.Services.AddScoped<ReportsService>();
+builder.Services.AddScoped<ReportsExportService>();
+builder.Services.AddScoped<ILeavePolicyService, LeavePolicyService>();
+builder.Services.AddScoped<
+    IEmployeeEmploymentProfileService,
+    EmployeeEmploymentProfileService>();
+builder.Services.AddScoped<ILeaveRequestPreparationService, LeaveRequestPreparationService>();
+builder.Services.AddScoped<LeaveAccountingService>();
+builder.Services.AddScoped<LeaveCatalogService>();
+builder.Services.AddSingleton<IPrivateFileStorage>(_ =>
+    new LocalPrivateFileStorage(
+        builder.Environment.ContentRootPath,
+        builder.Environment.WebRootPath,
+        builder.Configuration));
+builder.Services.AddSingleton<IProfileImageStorage, LocalProfileImageStorage>();
+builder.Services.AddSingleton(
+    RequestAttachmentOptions.FromConfiguration(builder.Configuration));
+var scannerProvider = builder.Configuration[
+    "Attachments:Scanner:Provider"];
+switch (scannerProvider?.Trim().ToLowerInvariant())
+{
+    case null or "" or "unconfigured":
+        builder.Services.AddSingleton<
+            IAttachmentMalwareScanner,
+            UnconfiguredAttachmentMalwareScanner>();
+        break;
+    case "clamav":
+        builder.Services.AddSingleton(
+            ClamAvAttachmentScannerOptions.FromConfiguration(
+                builder.Configuration));
+        builder.Services.AddSingleton<
+            IAttachmentMalwareScanner,
+            ClamAvAttachmentMalwareScanner>();
+        break;
+    default:
+        throw new InvalidOperationException(
+            "Attachments:Scanner:Provider must be 'Unconfigured' or 'ClamAV'.");
+}
 builder.Services.AddSingleton<
     IWorkflowNotificationPublisher,
     SignalRWorkflowNotificationPublisher>();
 builder.Services.AddSingleton<
     IWorkflowEmailSender,
     SmtpWorkflowEmailSender>();
-builder.Services.AddHostedService<WorkflowNotificationWorker>();
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddHostedService<WorkflowNotificationWorker>();
+    builder.Services.AddHostedService<LeaveBalanceMaintenanceWorker>();
+    builder.Services.AddHostedService<RequestAttachmentScanWorker>();
+    builder.Services.AddHostedService<RequestAttachmentStorageCleanupWorker>();
+}
+
 
 var secretKey = builder.Configuration["Jwt:SecretKey"]
     ?? throw new InvalidOperationException(

@@ -17,17 +17,19 @@ namespace FlowDisk.Api.Tests;
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class SqlServerFactAttribute : FactAttribute
 {
-    private const string ConnectionStringEnvironmentVariable =
-        "FLOWDESK_SQLSERVER_TEST_CONNECTION_STRING";
-
     public SqlServerFactAttribute()
     {
-        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(
-                ConnectionStringEnvironmentVariable)))
+        var environment =
+            SqlServerIntegrationTestSafety.ReadRelevantEnvironment();
+        if (string.IsNullOrWhiteSpace(environment[
+                SqlServerIntegrationTestSafety.ConnectionStringVariable]))
         {
-            Skip = $"Set {ConnectionStringEnvironmentVariable} to run " +
-                "against a separately provisioned SQL Server test database.";
+            Skip = "SQL Server integration configuration is not present.";
+            return;
         }
+
+        _ = SqlServerIntegrationTestSafety.ReadValidatedConnectionString(
+            environment);
     }
 }
 
@@ -40,11 +42,8 @@ public sealed class SqlServerIntegrationCollection
 [Collection(SqlServerIntegrationCollection.Name)]
 public sealed class SqlServerIntegrationTests
 {
-    private const string ConnectionStringEnvironmentVariable =
-        "FLOWDESK_SQLSERVER_TEST_CONNECTION_STRING";
-
     [SqlServerFact]
-    public async Task MigrationsApplyAndRoleAndStatusConstraintsRejectInvalidValues()
+    public async Task RoleAndStatusConstraintsRejectInvalidValues()
     {
         await using var factory = CreateFactory();
         await factory.InitializeDatabaseAsync();
@@ -119,28 +118,11 @@ public sealed class SqlServerIntegrationTests
 
     private static SqlServerIntegrationFactory CreateFactory()
     {
-        ApiFactory.ConfigureTestEnvironment();
-        var connectionString = Environment.GetEnvironmentVariable(
-            ConnectionStringEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            throw new InvalidOperationException(
-                $"{ConnectionStringEnvironmentVariable} is required.");
-        }
-
-        var settings = new SqlConnectionStringBuilder(connectionString);
-        if (!settings.InitialCatalog.StartsWith(
-                "FlowDesk_Test_",
-                StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(
-                settings.InitialCatalog,
-                "FlowDeskDb_New",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                "SQL Server integration tests require a separately provisioned " +
-                "database whose name starts with FlowDesk_Test_.");
-        }
+        var environment =
+            SqlServerIntegrationTestSafety.ReadRelevantEnvironment();
+        var connectionString =
+            SqlServerIntegrationTestSafety.ReadValidatedConnectionString(
+                environment);
 
         return new SqlServerIntegrationFactory(connectionString);
     }
@@ -207,37 +189,46 @@ public sealed class SqlServerIntegrationTests
                     "must already exist and be reachable.");
             }
 
-            var appliedMigrations =
-                await context.Database.GetAppliedMigrationsAsync();
-            if (!appliedMigrations.Any())
+            await context.Database.OpenConnectionAsync();
+            var connection = context.Database.GetDbConnection();
+            await using (var command = connection.CreateCommand())
             {
-                var connection = context.Database.GetDbConnection();
-                await connection.OpenAsync();
-                int existingTableCount;
-                try
-                {
-                    await using var command = connection.CreateCommand();
-                    command.CommandText =
-                        "SELECT COUNT(*) FROM sys.tables " +
-                        "WHERE schema_id = SCHEMA_ID(N'dbo') " +
-                        "AND name <> N'__EFMigrationsHistory'";
-                    existingTableCount = Convert.ToInt32(
-                        await command.ExecuteScalarAsync());
-                }
-                finally
-                {
-                    await connection.CloseAsync();
-                }
-
-                if (existingTableCount != 0)
+                command.CommandText =
+                    "SELECT DB_NAME(), " +
+                    "CONVERT(nvarchar(128), SERVERPROPERTY('ServerName'))";
+                await using var reader = await command.ExecuteReaderAsync();
+                if (!await reader.ReadAsync())
                 {
                     throw new InvalidOperationException(
-                        "An unmigrated SQL Server test database must not " +
-                        "contain application tables.");
+                        "Could not verify the connected SQL Server database identity.");
                 }
-            }
 
-            await context.Database.MigrateAsync();
+                SqlServerIntegrationTestSafety.RequireConnectedTarget(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    SqlServerIntegrationTestSafety.ReadRelevantEnvironment()
+                        [SqlServerIntegrationTestSafety.ApprovedInstanceVariable]);
+            }
+            await context.Database.CloseConnectionAsync();
+
+            var expectedMigrations = context.Database.GetMigrations();
+            IEnumerable<string> appliedMigrations;
+            try
+            {
+                appliedMigrations =
+                    await context.Database.GetAppliedMigrationsAsync();
+            }
+            catch (SqlException exception)
+            {
+                throw new InvalidOperationException(
+                    "The approved SQL integration database must already have " +
+                    "an accessible __EFMigrationsHistory table. Tests do not " +
+                    "create schema or apply migrations.",
+                    exception);
+            }
+            SqlServerIntegrationTestSafety.RequireMigrationsApplied(
+                expectedMigrations,
+                appliedMigrations);
         }
 
         public HttpClient CreateAuthorizedClient(int userId, string role)

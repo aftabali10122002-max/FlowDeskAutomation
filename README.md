@@ -8,6 +8,8 @@ It is designed to manage approval requests, department-based workflows, multi-le
 
 ### Approval Workflow
 - Employee approval request submission
+- Typed requests for material purchases, leave, expense reimbursement, IT access, travel, and work from home
+- Employee self-service profile editing and authenticated profile photos
 - Department-based approval management
 - Multi-level approval workflow
 - Configurable approval rules
@@ -20,8 +22,22 @@ It is designed to manage approval requests, department-based workflows, multi-le
 - User-targeted SignalR delivery at `/hubs/notifications`; the connection uses the existing JWT.
 - Assignment and workflow decision emails queued in a SQL Server outbox and sent asynchronously.
 - Configurable deadline reminders and automatic overdue escalation processing.
+- Requests without a matching workflow notify active Admins that manual assignment is needed; manual assignment and workflow decisions persist their notifications with the corresponding change.
+- Frontend action toasts are temporary and session-scoped; persisted notifications remain available in the notification feed.
 
 The Phase 5 migration source is `src/FlowDesk.Infrastructure/Persistence/Migrations/20261020231021_AddWorkflowNotifications.cs`. It has been generated and reviewed but **not applied** in this task. Apply it only through the normal reviewed deployment process to a verified target database.
+
+The Employee Self-Service Portal schema migration is `src/FlowDesk.Infrastructure/Persistence/Migrations/20261021185821_AddEmployeeSelfServicePortal.cs`. Its review script is `src/FlowDesk.Infrastructure/Persistence/Migrations/AddEmployeeSelfServicePortal.review.sql`. The migration is generated for review only and has **not been applied**; it preserves existing requests, assignments, decisions, notifications, and workflow history.
+
+### Leave Management — Phase 8 Backend
+- Leave requests are resolved against published, effective-dated policies and preserve the policy selection for each requested date.
+- The existing approval workflow remains in use. Requests without a matching workflow retain the existing Admin-assignment fallback.
+- Pending requests reserve available leave; final decisions release reservations and record used or scheduled units. Pending cancellation releases reservations. Cancelling approved future leave requires a linked approval request through `POST /api/requests/{id}/cancellation-requests`.
+- Employee endpoints: `GET /api/leave/types`, `GET /api/leave/me/balances`, and `GET /api/leave/me/history`.
+- Admin endpoints under `/api/admin/leave` manage policies, policy assignments, employee metadata, leave types, balances, manual adjustments, and adjustment audit history. `GET /api/leave/manager/team` provides the persisted-role- and department-scoped manager overview.
+- Accrual calculators support annual, monthly, and pay-period calculations, but automated accrual posting and carry-forward/expiry processing are not yet implemented. SQL Server integration and concurrency behavior have not been verified in this task.
+
+The additive workflow-accounting migration is `src/FlowDesk.Infrastructure/Persistence/Migrations/20261023202154_Phase8LeaveWorkflowAccounting.cs`; its offline SQL review script is `src/FlowDesk.Infrastructure/Persistence/Migrations/Phase8LeaveWorkflowAccounting.review.sql`. The migration has **not been applied**. It adds leave request policy snapshots and cancellation/type references, backfills ledger effective dates from their UTC creation timestamps, and replaces a query index. Review and apply only through the normal deployment process to a verified target.
 
 Email delivery is disabled unless `Email:Enabled` is set to `true`. Keep SMTP credentials in user-secrets or deployment environment variables, never in source-controlled settings:
 

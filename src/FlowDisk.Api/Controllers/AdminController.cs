@@ -13,10 +13,14 @@ namespace FlowDisk.Api.Controllers;
 public class AdminController : ControllerBase
 {
     private readonly AdminManagementService _service;
+    private readonly RequestTypeService _requestTypeService;
 
-    public AdminController(AdminManagementService service)
+    public AdminController(
+        AdminManagementService service,
+        RequestTypeService requestTypeService)
     {
         _service = service;
+        _requestTypeService = requestTypeService;
     }
 
     [HttpGet("users")]
@@ -146,6 +150,39 @@ public class AdminController : ControllerBase
         return Ok(departments.Select(MapDepartment).ToList());
     }
 
+    [HttpGet("request-types")]
+    public async Task<IActionResult> GetRequestTypes()
+    {
+        var adminUserId = GetAuthenticatedUserId();
+        if (adminUserId == null)
+        {
+            return Forbid();
+        }
+
+        return Ok(await _requestTypeService.GetAllForAdminAsync(
+            adminUserId.Value));
+    }
+
+    [HttpPatch("request-types/{id:int}/enabled")]
+    public async Task<IActionResult> SetRequestTypeEnabled(
+        int id,
+        SetRequestTypeEnabledDto dto)
+    {
+        var adminUserId = GetAuthenticatedUserId();
+        if (adminUserId == null)
+        {
+            return Forbid();
+        }
+
+        var requestType = await _requestTypeService.SetEnabledAsync(
+            adminUserId.Value,
+            id,
+            dto.IsEnabled);
+        return requestType is null
+            ? NotFound(new { message = "Request type not found." })
+            : Ok(requestType);
+    }
+
     [HttpPost("departments")]
     public async Task<IActionResult> CreateDepartment(CreateDepartmentDto dto)
     {
@@ -183,7 +220,9 @@ public class AdminController : ControllerBase
             Role = user.Role,
             IsActive = user.IsActive,
             DepartmentId = user.DepartmentId,
-            CreatedAtUtc = user.CreatedAtUtc
+            CreatedAtUtc = user.CreatedAtUtc,
+            HasProfileImage = user.ProfileImageStorageKey is not null,
+            ProfileImageUrl = $"/api/profile/users/{user.Id}/photo"
         };
     }
 

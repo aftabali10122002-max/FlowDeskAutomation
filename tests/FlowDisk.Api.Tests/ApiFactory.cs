@@ -1,8 +1,11 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using FlowDesk.Application.Interfaces;
 using FlowDesk.Domain.Entities;
+using FlowDesk.Domain.Enums;
 using FlowDesk.Infrastructure.Persistence;
+using FlowDisk.Api.Attachments;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -24,13 +27,32 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     private readonly SqliteConnection _connection =
         new("Data Source=:memory:");
+    private readonly string _profileImageStoragePath = Path.Combine(
+        Path.GetTempPath(),
+        "FlowDesk.Api.Tests",
+        Guid.NewGuid().ToString("N"));
+    private readonly string _requestAttachmentStoragePath = Path.Combine(
+        Path.GetTempPath(),
+        "FlowDesk.Api.Tests",
+        Guid.NewGuid().ToString("N"));
+
+    public string ProfileImageStoragePath => _profileImageStoragePath;
+    public string RequestAttachmentStoragePath =>
+        _requestAttachmentStoragePath;
+    public IAttachmentMalwareScanner? TestAttachmentMalwareScanner { get; set; }
+    public int AttachmentUploadConcurrencyLimit { get; set; } = 2;
+    public int AttachmentScanMaximumAttempts { get; set; } = 6;
+    public int AttachmentScanRetryBaseSeconds { get; set; } = 30;
+    public int AttachmentCleanupBatchSize { get; set; } = 25;
+    public IPrivateFileStorage? TestPrivateFileStorage { get; set; }
+    public int ReportExportMaxRows { get; set; } = 10_000;
 
     static ApiFactory()
     {
         ConfigureTestEnvironment();
     }
 
-    public static void ConfigureTestEnvironment()
+        public static void ConfigureTestEnvironment()
     {
         Environment.SetEnvironmentVariable(
             "Jwt__SecretKey",
@@ -118,6 +140,47 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         return user;
     }
 
+    public async Task AddDefaultCompanyLeavePolicyAsync(int adminUserId)
+    {
+        using var scope = Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var policy = new LeavePolicy(
+            "TEST-COMPANY",
+            "Test company leave policy",
+            1,
+            LeavePolicyScope.Company,
+            null,
+            null,
+            null,
+            new DateOnly(2020, 1, 1),
+            null,
+            LeaveDayCalculationMethod.CalendarDays,
+            null,
+            null,
+            allowsHalfDays: false,
+            halfDayUnits: null,
+            isAccrualEnabled: false,
+            accrualFrequency: null,
+            allowsCarryForward: false,
+            carryForwardCap: null,
+            carryForwardExpiryMonths: null,
+            probationPeriodDays: null,
+            allowsLeaveDuringProbation: true,
+            allowsNegativeBalance: true);
+        context.LeavePolicies.Add(policy);
+        await context.SaveChangesAsync();
+        foreach (var leaveTypeId in new[] { 1, 2, 3, 4 })
+        {
+            policy.AddEntitlement(new LeavePolicyEntitlement(
+                policy.Id,
+                leaveTypeId,
+                20m));
+        }
+
+        policy.Publish(adminUserId, DateTime.UtcNow);
+        await context.SaveChangesAsync();
+    }
+
     public async Task<ApprovalRequest> AddRequestAsync(
         int? ownerUserId,
         int? departmentId = null)
@@ -158,17 +221,51 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 ["Jwt:Audience"] = Audience,
                 ["Jwt:ExpirationMinutes"] = "30",
                 ["RateLimiting:Login:PermitLimit"] = "10",
-                ["RateLimiting:Registration:PermitLimit"] = "5"
+                ["RateLimiting:Registration:PermitLimit"] = "5",
+                ["Reports:ExportMaxRows"] = ReportExportMaxRows.ToString(),
+                ["Leave:BusinessTimeZoneId"] = "UTC",
+                ["ProfileImages:StoragePath"] = _profileImageStoragePath,
+                ["Attachments:StoragePath"] = _requestAttachmentStoragePath,
+                ["Attachments:Scanner:MaximumAttempts"] =
+                    AttachmentScanMaximumAttempts.ToString(),
+                ["Attachments:Scanner:RetryBaseSeconds"] =
+                    AttachmentScanRetryBaseSeconds.ToString()
             });
         });
 
         builder.ConfigureServices(services =>
         {
+            services.RemoveAll<RequestAttachmentOptions>();
+            services.AddSingleton(RequestAttachmentOptions.FromConfiguration(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Attachments:MaximumConcurrentUploadsPerUser"] =
+                            AttachmentUploadConcurrencyLimit.ToString(),
+                        ["Attachments:Scanner:MaximumAttempts"] =
+                            AttachmentScanMaximumAttempts.ToString(),
+                        ["Attachments:Scanner:RetryBaseSeconds"] =
+                            AttachmentScanRetryBaseSeconds.ToString(),
+                        ["Attachments:CleanupBatchSize"] =
+                            AttachmentCleanupBatchSize.ToString(),
+                        ["Attachments:OrphanFileGraceHours"] = "24"
+                    })
+                    .Build()));
+            if (TestPrivateFileStorage is not null)
+            {
+                services.RemoveAll<IPrivateFileStorage>();
+                services.AddSingleton(TestPrivateFileStorage);
+            }
             services.RemoveAll<IDbContextOptionsConfiguration<AppDbContext>>();
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<AppDbContext>();
             services.AddDbContext<AppDbContext>(options =>
                 options.UseSqlite(_connection));
+            if (TestAttachmentMalwareScanner is not null)
+            {
+                services.RemoveAll<IAttachmentMalwareScanner>();
+                services.AddSingleton(TestAttachmentMalwareScanner);
+            }
         });
     }
 
@@ -178,6 +275,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         if (disposing)
         {
             _connection.Dispose();
+            if (Directory.Exists(_profileImageStoragePath))
+            {
+                Directory.Delete(_profileImageStoragePath, recursive: true);
+            }
+            if (Directory.Exists(_requestAttachmentStoragePath))
+            {
+                Directory.Delete(_requestAttachmentStoragePath, recursive: true);
+            }
         }
     }
 }
