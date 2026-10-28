@@ -96,7 +96,8 @@ Directory names may differ slightly as the project evolves.
 Install the following tools:
 
 - .NET 10 SDK
-- SQL Server
+- SQL Server, or Docker with the Compose plugin for the local container setup
+- `sqlcmd` or another SQL Server client to initialize a local Compose database
 - Node.js and npm
 - Git
 
@@ -133,7 +134,7 @@ Open a separate terminal:
 
 ```powershell
 cd web
-npm install
+npm ci
 npm run dev
 ```
 
@@ -150,8 +151,148 @@ npm run build
 From the repository root:
 
 ```powershell
-dotnet test --configuration Release
+dotnet restore .\FlowDesk.slnx
+dotnet build .\FlowDesk.slnx --configuration Release --no-restore
+dotnet test .\tests\FlowDisk.Api.Tests\FlowDisk.Api.Tests.csproj --configuration Release --no-build
+dotnet test .\tests\FlowDisk.Api.Tests\FlowDisk.Api.Tests.csproj --configuration Release --collect:"XPlat Code Coverage"
 ```
+
+The coverage command uses Coverlet's VSTest collector and writes Cobertura XML
+under `tests/FlowDisk.Api.Tests/TestResults`. CI uploads this report as the
+`backend-coverage` artifact; no coverage threshold is enforced yet. The two
+SQL Server integration tests are skipped unless the separately provisioned,
+explicitly configured test database is available. The PDF export coverage is
+temporarily skipped while the CI-only HTTP 409 pagination condition is
+investigated; a local SQLite pass does not resolve that CI failure.
+
+## Dependency Management
+
+NuGet restore lock files are generated for the .NET projects by
+`Directory.Build.props` and are committed alongside their project files. They
+record the resolved direct and transitive package versions, so local and CI
+restores use the same dependency graph. CI uses locked-mode restore and fails
+when a project change would require an unreviewed lock-file update.
+
+After intentionally changing a NuGet `PackageReference`, regenerate and review
+the lock files from the repository root:
+
+```powershell
+dotnet restore .\FlowDesk.slnx
+git diff -- '**/packages.lock.json'
+dotnet restore .\FlowDesk.slnx --locked-mode
+```
+
+Commit the project-file and corresponding lock-file changes together. Do not
+edit lock-file dependency versions or content by hand. To audit direct and
+transitive NuGet dependencies for known vulnerabilities:
+
+```powershell
+dotnet list .\FlowDesk.slnx package --vulnerable --include-transitive
+```
+
+The web dependencies are pinned by the committed `web/package-lock.json`.
+From `web`, install exactly those resolved versions and audit high and critical
+advisories with:
+
+```powershell
+npm ci
+npm audit --audit-level=high
+npm run lint
+npm run test
+npm run build
+```
+
+Dependabot checks the NuGet projects, npm lock file, and GitHub Actions weekly.
+Compatible minor and patch updates are grouped into reviewable pull requests;
+major updates remain separate, and no updates are automatically merged. Review
+each update's manifest and lock-file diff, advisory details, and CI results
+before merging. CI performs locked-mode NuGet restore, fails on high or
+critical NuGet restore advisories, runs a transitive package audit, and audits
+npm dependencies before frontend lint, tests, and build.
+
+## Local API and SQL Server with Docker Compose
+
+The Compose setup is for local development only. It binds both the API and SQL
+Server ports to `127.0.0.1` (not to public interfaces), keeps database and
+private attachment/profile-image files in named volumes, and never applies
+migrations automatically. Do not use it as a production deployment template.
+
+1. Install Docker Engine/Desktop with the Compose plugin. Copy the placeholder
+   configuration and replace the password and JWT secret with local-only
+   values:
+
+   ```powershell
+   Copy-Item .\.env.example .\.env
+   ```
+
+2. Start the isolated SQL Server service and check its health:
+
+   ```powershell
+   docker compose up --detach database
+   docker compose ps
+   ```
+
+   The database health check confirms that SQL Server is listening on its
+   private Compose network; it does not verify schema or migration state.
+
+3. Initialize only the new local `FlowDeskLocal` database. First inspect and
+   review the generated migration script; confirm the target is the Compose
+   `database` service and `FlowDeskLocal`. The API does not run migrations at
+   startup. Install the SQL Server command-line tools or use another approved
+   local SQL Server client to apply the script. The EF design-time factory
+   uses an offline-only connection, so script generation does not connect to
+   SQL Server:
+
+   ```powershell
+   dotnet tool install --global dotnet-ef --version 10.0.0
+   New-Item -ItemType Directory -Force .\artifacts | Out-Null
+   dotnet ef migrations script --idempotent `
+     --project .\src\FlowDesk.Infrastructure\FlowDesk.Infrastructure.csproj `
+     --startup-project .\src\FlowDisk.Api\FlowDisk.Api.csproj `
+     --output .\artifacts\FlowDeskLocal.sql
+   ```
+
+   Create the database and execute the reviewed script. `sqlcmd` prompts for
+   the SA password; the Compose SQL port is loopback-only:
+
+   ```powershell
+   sqlcmd -S localhost,1433 -U sa -C -d master -Q "IF DB_ID('FlowDeskLocal') IS NULL CREATE DATABASE [FlowDeskLocal]" -b
+   sqlcmd -S localhost,1433 -U sa -C -d FlowDeskLocal -i .\artifacts\FlowDeskLocal.sql -b
+   ```
+
+   If `FLOWDESK_SQL_PORT` in `.env` is changed, use that port in these commands.
+   Choose a local SA password without semicolons because it is included in the
+   API's SQL Server connection string.
+
+   These commands are only for the fresh local Compose database. Never point
+   the generated script or these commands at production or another existing
+   database. Existing databases require the documented preflight, backup,
+   migration review, and separate authorization process.
+
+4. After the local migration completes, start the API and check health:
+
+   ```powershell
+   docker compose --profile local-app up --build --detach api
+   docker compose ps
+   ```
+
+   The API liveness check is available at
+   `http://localhost:8080/health/live`. It verifies process liveness, not
+   database schema state.
+   The local Compose stack does not provide a malware scanner; attachment
+   downloads remain fail-closed until an approved scanner is configured.
+
+5. Inspect logs and shut down without deleting persisted database or file
+   data:
+
+   ```powershell
+   docker compose logs --follow api database
+   docker compose down
+   ```
+
+   `docker compose down --volumes` permanently deletes the local database and
+   private-file volumes; do not use it unless you intentionally want to erase
+   this local development data.
 
 ## Database Safety
 
